@@ -1,0 +1,5 @@
+
+# Face Recognition Models - Too large for GitHub
+models/
+*.onnx
+*.zip

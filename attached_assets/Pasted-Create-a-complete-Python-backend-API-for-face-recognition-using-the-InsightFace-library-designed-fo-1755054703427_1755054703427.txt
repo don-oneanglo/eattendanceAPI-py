@@ -1,0 +1,83 @@
+Create a complete Python backend API for face recognition using the InsightFace library, designed for enrollment, verification, and face search.
+
+Requirements:
+
+Environment & Dependencies:
+
+Use Python 3.10 or later.
+
+Install dependencies:
+
+bash
+Copy
+Edit
+pip install insightface==0.7.3 onnxruntime==1.17.1 fastapi==0.111.0 uvicorn==0.29.0 pillow==10.2.0 numpy==1.26.4 python-multipart==0.0.9
+Use the buffalo_l model from InsightFace’s model zoo for high accuracy.
+
+Automatically download the model into a /models folder on first run.
+
+Folder Structure:
+
+bash
+Copy
+Edit
+/app  
+  ├── main.py            # FastAPI app  
+  ├── face_engine.py     # InsightFace initialization and functions  
+  ├── storage/           # Stores enrolled faces and embeddings  
+  └── models/            # Pretrained models (auto-download)  
+Face Engine (face_engine.py):
+
+Load the buffalo_l InsightFace model.
+
+Provide functions for:
+
+extract_embedding(image) → returns a 512-d embedding.
+
+enroll_face(name, image) → saves image & embedding in /storage folder and JSON DB.
+
+verify_face(image1, image2) → returns similarity score (cosine similarity).
+
+identify_face(image) → searches embeddings DB for closest match, returns name & score.
+
+Use cosine similarity threshold (default 0.6, configurable).
+
+Store all embeddings in a faces_db.json file for persistence.
+
+API Endpoints (main.py):
+
+POST /enroll → form-data: name (string), file (image). Saves to DB.
+
+POST /verify → form-data: file1, file2. Returns match score and boolean is_match.
+
+POST /identify → form-data: file. Returns best match name & score, or "Unknown".
+
+GET /faces → returns list of enrolled names & metadata.
+
+DELETE /faces/{name} → removes that person’s data from DB.
+
+Features to Maximize InsightFace:
+
+Use face alignment before embedding extraction for better accuracy.
+
+Handle multiple faces in an image — reject if more than one is detected in enroll or verify.
+
+Return top-3 matches in identify endpoint (with scores).
+
+Return bounding box coordinates for detected face.
+
+Support JPG and PNG uploads.
+
+Run Command:
+
+bash
+Copy
+Edit
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+Testing:
+
+After starting, the API should be testable via Swagger UI at /docs.
+
+Add sample cURL commands in the README.
+
+Goal: The final result should be a self-contained face recognition API that is ready for deployment, with persistent storage of embeddings, high-accuracy search, and full use of InsightFace’s capabilities.
