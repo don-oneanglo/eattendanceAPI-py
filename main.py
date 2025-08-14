@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
         try:
             db_service = DatabaseService()
             await db_service.initialize()
-            print("SQL Server database service initialized successfully")
+            print("MySQL database service initialized successfully")
         except Exception as e:
             print(f"Warning: Database service failed to initialize: {e}")
             print("Continuing with file-based storage only")
