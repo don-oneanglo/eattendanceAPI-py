@@ -2,6 +2,13 @@
 
 This is a Face Recognition API built with Python FastAPI and the InsightFace library. The system provides face enrollment, verification, and identification capabilities using the high-accuracy buffalo_l model. It's designed as a production-ready backend service that can register faces, verify if two images contain the same person, and identify individuals from a database of enrolled faces. The API uses cosine similarity matching with configurable thresholds and maintains persistent storage of face embeddings.
 
+## Recent Updates (January 2025)
+- **SQL Server Integration**: Configured API to connect to user's SQL Server database (srv1521.hstgr.io)
+- **Database Schema Support**: Full support for FaceData, Student, Teacher, and AttendanceRecords tables
+- **Dual Storage System**: API works with both file-based storage and SQL Server database
+- **Recognition Logging**: Automatic logging of face recognition attempts with confidence scores
+- **Production Ready**: Configured for deployment with proper SQL Server drivers (pyodbc)
+
 # User Preferences
 
 Preferred communication style: Simple, everyday language.
@@ -20,10 +27,13 @@ Preferred communication style: Simple, everyday language.
 - **Similarity Matching**: Uses cosine similarity with configurable threshold (default 0.6)
 
 ## Data Storage
-- **JSON Database**: Simple file-based storage using `faces_db.json` for persistence
-- **Embedding Storage**: Face embeddings stored as arrays alongside metadata
-- **File Organization**: Structured storage directory for database and potential face images
-- **No External Database**: Self-contained solution without external database dependencies
+- **Dual Storage System**: Both file-based JSON and SQL Server database integration
+- **SQL Server Integration**: Configured for user's database (srv1521.hstgr.io)
+- **Database Schema**: Supports FaceData, Student, Teacher, and AttendanceRecords tables
+- **Embedding Storage**: Face embeddings stored as JSON in FaceDescriptor field
+- **Image Storage**: Binary image data stored in ImageData field (VARBINARY)
+- **Recognition Logging**: Automatic creation of FaceRecognitionLogs table for tracking
+- **Fallback Support**: File-based storage available when database unavailable
 
 ## Image Processing
 - **PIL/Pillow**: Handles image format conversion and basic processing

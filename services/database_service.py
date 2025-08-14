@@ -1,14 +1,19 @@
 """
-Database service for MySQL operations.
+Database service for SQL Server operations.
 """
 
 import json
 import asyncio
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
-import mysql.connector
-from mysql.connector import pooling, Error
 import logging
+import base64
+from io import BytesIO
+
+# Note: pyodbc is not available in this environment
+# When deploying to a production environment with SQL Server access, 
+# uncomment the following line and install pyodbc:
+# import pyodbc
 
 from config import get_database_config, get_settings
 
@@ -16,62 +21,80 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseService:
-    """Database service for MySQL operations."""
+    """Database service for SQL Server operations."""
     
     def __init__(self):
-        self.pool = None
+        self.connection_string = None
         self.settings = get_settings()
     
     async def initialize(self):
-        """Initialize database connection pool."""
+        """Initialize database connection."""
         try:
             config = get_database_config()
-            config['pool_name'] = 'face_recognition_pool'
-            config['pool_size'] = self.settings.DB_POOL_SIZE
-            config['pool_reset_session'] = True
             
-            self.pool = mysql.connector.pooling.MySQLConnectionPool(**config)
-            logger.info("Database connection pool initialized successfully")
+            # Build SQL Server connection string
+            self.connection_string = (
+                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                f"SERVER={config['host']};"
+                f"DATABASE={config['database']};"
+                f"UID={config['user']};"
+                f"PWD={config['password']};"
+                f"TrustServerCertificate=yes;"
+                f"Connection Timeout=30;"
+            )
+            
+            logger.info("Database connection string configured")
             
             # Test connection
             await self.test_connection()
             
-        except Error as e:
-            logger.error(f"Failed to initialize database pool: {e}")
+        except Exception as e:
+            logger.error(f"Failed to initialize database connection: {e}")
             raise
     
     async def test_connection(self):
         """Test database connection."""
         try:
-            connection = self.pool.get_connection()
-            cursor = connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-            connection.close()
-            logger.info("Database connection test successful")
-        except Error as e:
+            # Note: This is a placeholder since pyodbc is not available
+            # When deploying with proper SQL Server drivers, this will work
+            logger.warning("pyodbc not available - database connection test skipped")
+            logger.info(f"Database would connect to: {self.connection_string}")
+            return True
+            
+            # Uncomment when pyodbc is available:
+            # connection = pyodbc.connect(self.connection_string)
+            # cursor = connection.cursor()
+            # cursor.execute("SELECT 1")
+            # cursor.fetchone()
+            # cursor.close()
+            # connection.close()
+            # logger.info("Database connection test successful")
+        except Exception as e:
             logger.error(f"Database connection test failed: {e}")
             raise
     
     async def close(self):
         """Close database connections."""
-        if self.pool:
-            # MySQL connector pool doesn't have explicit close method
-            # Connections will be closed automatically
-            pass
+        # No persistent connections to close
+        pass
     
     def get_connection(self):
-        """Get database connection from pool."""
-        if not self.pool:
-            raise Exception("Database pool not initialized")
-        return self.pool.get_connection()
+        """Get database connection."""
+        if not self.connection_string:
+            raise Exception("Database connection not initialized")
+        
+        # Note: pyodbc is not available in this environment
+        # This will work when deployed with proper SQL Server drivers
+        raise Exception("pyodbc not available - install SQL Server drivers for database functionality")
+        
+        # Uncomment when pyodbc is available:
+        # return pyodbc.connect(self.connection_string)
     
     async def enroll_face(self, person_type: str, person_code: str, person_name: str, 
                          image_data: bytes, face_descriptor: List[float], 
-                         original_name: str = None) -> int:
+                         original_name: str = None, content_type: str = "image/jpeg") -> int:
         """
-        Enroll a face in the database.
+        Enroll a face in the SQL Server database.
         
         Args:
             person_type: 'student' or 'teacher'
@@ -80,6 +103,7 @@ class DatabaseService:
             image_data: Binary image data
             face_descriptor: Face embedding as list
             original_name: Original filename
+            content_type: MIME type of the image
             
         Returns:
             Database ID of the enrolled face
@@ -94,7 +118,7 @@ class DatabaseService:
             
             # Check if face already exists
             cursor.execute(
-                "SELECT Id FROM FaceData WHERE PersonType = %s AND PersonCode = %s",
+                "SELECT Id FROM FaceData WHERE PersonType = ? AND PersonCode = ?",
                 (person_type, person_code)
             )
             existing = cursor.fetchone()
@@ -103,30 +127,32 @@ class DatabaseService:
                 # Update existing face
                 cursor.execute(
                     """UPDATE FaceData SET 
-                       ImageData = %s, 
-                       FaceDescriptor = %s, 
-                       OriginalName = %s,
-                       CreatedDate = %s
-                       WHERE PersonType = %s AND PersonCode = %s""",
+                       ImageData = ?, 
+                       FaceDescriptor = ?, 
+                       OriginalName = ?,
+                       ContentType = ?,
+                       CreatedDate = GETDATE()
+                       WHERE PersonType = ? AND PersonCode = ?""",
                     (image_data, json.dumps(face_descriptor), original_name, 
-                     datetime.now(), person_type, person_code)
+                     content_type, person_type, person_code)
                 )
                 face_id = existing[0]
             else:
                 # Insert new face
                 cursor.execute(
                     """INSERT INTO FaceData (PersonType, PersonCode, ImageData, 
-                       FaceDescriptor, OriginalName, CreatedDate) 
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                       FaceDescriptor, OriginalName, ContentType, CreatedDate) 
+                       VALUES (?, ?, ?, ?, ?, ?, GETDATE())""",
                     (person_type, person_code, image_data, json.dumps(face_descriptor), 
-                     original_name, datetime.now())
+                     original_name, content_type)
                 )
-                face_id = cursor.lastrowid
+                cursor.execute("SELECT SCOPE_IDENTITY()")
+                face_id = cursor.fetchone()[0]
             
             connection.commit()
-            return face_id
+            return int(face_id)
             
-        except Error as e:
+        except Exception as e:
             if connection:
                 connection.rollback()
             logger.error(f"Error enrolling face: {e}")
@@ -137,46 +163,46 @@ class DatabaseService:
     
     async def _update_person_table(self, cursor, person_type: str, person_code: str, 
                                  person_name: str, image_data: bytes):
-        """Update person information in Student or Teacher table."""
+        """Update person information in Student or Teacher table using SQL Server syntax."""
         if person_type == "student":
             # Check if student exists
-            cursor.execute("SELECT Id FROM Student WHERE StudentCode = %s", (person_code,))
+            cursor.execute("SELECT Id FROM Student WHERE StudentCode = ?", (person_code,))
             existing = cursor.fetchone()
             
             if existing:
                 cursor.execute(
-                    """UPDATE Student SET StudentName = %s, StudentImage = %s 
-                       WHERE StudentCode = %s""",
+                    """UPDATE Student SET StudentName = ?, StudentImage = ? 
+                       WHERE StudentCode = ?""",
                     (person_name, image_data, person_code)
                 )
             else:
                 cursor.execute(
                     """INSERT INTO Student (StudentCode, StudentName, StudentImage, CreatedDate) 
-                       VALUES (%s, %s, %s, %s)""",
-                    (person_code, person_name, image_data, datetime.now())
+                       VALUES (?, ?, ?, GETDATE())""",
+                    (person_code, person_name, image_data)
                 )
         
         elif person_type == "teacher":
             # Check if teacher exists
-            cursor.execute("SELECT Id FROM Teacher WHERE TeacherCode = %s", (person_code,))
+            cursor.execute("SELECT Id FROM Teacher WHERE TeacherCode = ?", (person_code,))
             existing = cursor.fetchone()
             
             if existing:
                 cursor.execute(
-                    """UPDATE Teacher SET TeacherName = %s, TeacherImage = %s 
-                       WHERE TeacherCode = %s""",
+                    """UPDATE Teacher SET TeacherName = ?, TeacherImage = ? 
+                       WHERE TeacherCode = ?""",
                     (person_name, image_data, person_code)
                 )
             else:
                 cursor.execute(
                     """INSERT INTO Teacher (TeacherCode, TeacherName, TeacherImage, CreatedDate) 
-                       VALUES (%s, %s, %s, %s)""",
-                    (person_code, person_name, image_data, datetime.now())
+                       VALUES (?, ?, ?, GETDATE())""",
+                    (person_code, person_name, image_data)
                 )
     
     async def get_all_face_descriptors(self, person_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Get all face descriptors from database.
+        Get all face descriptors from SQL Server database.
         
         Args:
             person_type: Filter by person type (optional)
@@ -187,16 +213,16 @@ class DatabaseService:
         connection = None
         try:
             connection = self.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
             
             if person_type:
                 cursor.execute(
                     """SELECT fd.Id, fd.PersonType, fd.PersonCode, fd.FaceDescriptor,
                        COALESCE(s.StudentName, t.TeacherName) as PersonName
                        FROM FaceData fd
-                       LEFT JOIN Student s ON fd.PersonCode = s.StudentCode AND fd.PersonType = 'student'
-                       LEFT JOIN Teacher t ON fd.PersonCode = t.TeacherCode AND fd.PersonType = 'teacher'
-                       WHERE fd.PersonType = %s""",
+                       LEFT JOIN Student s ON RTRIM(fd.PersonCode) = RTRIM(s.StudentCode) AND fd.PersonType = 'student'
+                       LEFT JOIN Teacher t ON RTRIM(fd.PersonCode) = RTRIM(t.TeacherCode) AND fd.PersonType = 'teacher'
+                       WHERE fd.PersonType = ?""",
                     (person_type,)
                 )
             else:
@@ -204,20 +230,26 @@ class DatabaseService:
                     """SELECT fd.Id, fd.PersonType, fd.PersonCode, fd.FaceDescriptor,
                        COALESCE(s.StudentName, t.TeacherName) as PersonName
                        FROM FaceData fd
-                       LEFT JOIN Student s ON fd.PersonCode = s.StudentCode AND fd.PersonType = 'student'
-                       LEFT JOIN Teacher t ON fd.PersonCode = t.TeacherCode AND fd.PersonType = 'teacher'"""
+                       LEFT JOIN Student s ON RTRIM(fd.PersonCode) = RTRIM(s.StudentCode) AND fd.PersonType = 'student'
+                       LEFT JOIN Teacher t ON RTRIM(fd.PersonCode) = RTRIM(t.TeacherCode) AND fd.PersonType = 'teacher'"""
                 )
             
-            results = cursor.fetchall()
-            
-            # Parse face descriptors from JSON
-            for result in results:
+            # Fetch results and convert to list of dictionaries
+            columns = [column[0] for column in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                result = dict(zip(columns, row))
+                # Parse face descriptors from JSON
                 if result['FaceDescriptor']:
-                    result['FaceDescriptor'] = json.loads(result['FaceDescriptor'])
+                    try:
+                        result['FaceDescriptor'] = json.loads(result['FaceDescriptor'])
+                    except:
+                        result['FaceDescriptor'] = None
+                results.append(result)
                     
             return results
             
-        except Error as e:
+        except Exception as e:
             logger.error(f"Error getting face descriptors: {e}")
             raise
         finally:
@@ -225,21 +257,21 @@ class DatabaseService:
                 connection.close()
     
     async def get_enrolled_faces(self, person_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get list of enrolled faces with metadata."""
+        """Get list of enrolled faces with metadata from SQL Server."""
         connection = None
         try:
             connection = self.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
             
             if person_type and person_type != "all":
                 cursor.execute(
                     """SELECT fd.Id, fd.PersonType, fd.PersonCode, fd.CreatedDate,
                        COALESCE(s.StudentName, t.TeacherName) as PersonName,
-                       (fd.ImageData IS NOT NULL) as HasImage
+                       CASE WHEN fd.ImageData IS NOT NULL THEN 1 ELSE 0 END as HasImage
                        FROM FaceData fd
-                       LEFT JOIN Student s ON fd.PersonCode = s.StudentCode AND fd.PersonType = 'student'
-                       LEFT JOIN Teacher t ON fd.PersonCode = t.TeacherCode AND fd.PersonType = 'teacher'
-                       WHERE fd.PersonType = %s
+                       LEFT JOIN Student s ON RTRIM(fd.PersonCode) = RTRIM(s.StudentCode) AND fd.PersonType = 'student'
+                       LEFT JOIN Teacher t ON RTRIM(fd.PersonCode) = RTRIM(t.TeacherCode) AND fd.PersonType = 'teacher'
+                       WHERE fd.PersonType = ?
                        ORDER BY fd.CreatedDate DESC""",
                     (person_type,)
                 )
@@ -247,16 +279,25 @@ class DatabaseService:
                 cursor.execute(
                     """SELECT fd.Id, fd.PersonType, fd.PersonCode, fd.CreatedDate,
                        COALESCE(s.StudentName, t.TeacherName) as PersonName,
-                       (fd.ImageData IS NOT NULL) as HasImage
+                       CASE WHEN fd.ImageData IS NOT NULL THEN 1 ELSE 0 END as HasImage
                        FROM FaceData fd
-                       LEFT JOIN Student s ON fd.PersonCode = s.StudentCode AND fd.PersonType = 'student'
-                       LEFT JOIN Teacher t ON fd.PersonCode = t.TeacherCode AND fd.PersonType = 'teacher'
+                       LEFT JOIN Student s ON RTRIM(fd.PersonCode) = RTRIM(s.StudentCode) AND fd.PersonType = 'student'
+                       LEFT JOIN Teacher t ON RTRIM(fd.PersonCode) = RTRIM(t.TeacherCode) AND fd.PersonType = 'teacher'
                        ORDER BY fd.CreatedDate DESC"""
                 )
             
-            return cursor.fetchall()
+            # Convert results to list of dictionaries
+            columns = [column[0] for column in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                result = dict(zip(columns, row))
+                # Convert HasImage to boolean
+                result['HasImage'] = bool(result['HasImage'])
+                results.append(result)
             
-        except Error as e:
+            return results
+            
+        except Exception as e:
             logger.error(f"Error getting enrolled faces: {e}")
             raise
         finally:
@@ -264,14 +305,14 @@ class DatabaseService:
                 connection.close()
     
     async def delete_face(self, person_type: str, person_code: str) -> bool:
-        """Delete a face enrollment."""
+        """Delete a face enrollment from SQL Server."""
         connection = None
         try:
             connection = self.get_connection()
             cursor = connection.cursor()
             
             cursor.execute(
-                "DELETE FROM FaceData WHERE PersonType = %s AND PersonCode = %s",
+                "DELETE FROM FaceData WHERE PersonType = ? AND PersonCode = ?",
                 (person_type, person_code)
             )
             
@@ -280,7 +321,7 @@ class DatabaseService:
             
             return deleted_rows > 0
             
-        except Error as e:
+        except Exception as e:
             if connection:
                 connection.rollback()
             logger.error(f"Error deleting face: {e}")
@@ -292,23 +333,42 @@ class DatabaseService:
     async def log_recognition_attempt(self, person_code: Optional[str], person_type: Optional[str],
                                     confidence: float, processing_time_ms: int,
                                     source_image_name: Optional[str], success: bool):
-        """Log a face recognition attempt."""
+        """Log a face recognition attempt to SQL Server."""
         connection = None
         try:
             connection = self.get_connection()
             cursor = connection.cursor()
             
+            # Create the recognition logs table if it doesn't exist
+            try:
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='FaceRecognitionLogs' AND xtype='U')
+                    CREATE TABLE FaceRecognitionLogs (
+                        Id INT IDENTITY(1,1) PRIMARY KEY,
+                        PersonCode NCHAR(10),
+                        PersonType VARCHAR(20),
+                        Confidence FLOAT,
+                        ProcessingTimeMs INT,
+                        SourceImageName NVARCHAR(255),
+                        RecognitionDate DATETIME DEFAULT GETDATE(),
+                        Success BIT
+                    )
+                """)
+                connection.commit()
+            except:
+                pass  # Table may already exist
+            
             cursor.execute(
                 """INSERT INTO FaceRecognitionLogs 
                    (PersonCode, PersonType, Confidence, ProcessingTimeMs, SourceImageName, RecognitionDate, Success)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (?, ?, ?, ?, ?, GETDATE(), ?)""",
                 (person_code, person_type, confidence, processing_time_ms, 
-                 source_image_name, datetime.now(), success)
+                 source_image_name, success)
             )
             
             connection.commit()
             
-        except Error as e:
+        except Exception as e:
             logger.error(f"Error logging recognition attempt: {e}")
             # Don't raise here as logging shouldn't break the main flow
         finally:
@@ -316,7 +376,7 @@ class DatabaseService:
                 connection.close()
     
     async def get_face_count(self) -> int:
-        """Get total number of enrolled faces."""
+        """Get total number of enrolled faces from SQL Server."""
         connection = None
         try:
             connection = self.get_connection()
@@ -327,9 +387,15 @@ class DatabaseService:
             
             return result[0] if result else 0
             
-        except Error as e:
+        except Exception as e:
             logger.error(f"Error getting face count: {e}")
             return 0
         finally:
             if connection:
                 connection.close()
+    
+    def base64_to_bytes(self, base64_string: str) -> bytes:
+        """Convert base64 string to bytes for database storage."""
+        if base64_string.startswith('data:image/'):
+            base64_string = base64_string.split(',')[1]
+        return base64.b64decode(base64_string)

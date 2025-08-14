@@ -43,8 +43,9 @@ class Settings:
     
     def __init__(self):
         """Initialize settings with environment variables."""
+        # Use your provided SQL Server database configuration
         self.DB_HOST = os.getenv("DB_HOST", "srv1521.hstgr.io")
-        self.DB_USER = os.getenv("DB_USER", "u311154254_TADB")
+        self.DB_USER = os.getenv("DB_USER", "u311154254_TADB") 
         self.DB_PASSWORD = os.getenv("DB_PASSWORD", "Anglo!123456")
         self.DB_NAME = os.getenv("DB_NAME", "u311154254_TestAttendance")
         self.DB_CHARSET = os.getenv("DB_CHARSET", "utf8mb4")

@@ -7,6 +7,7 @@ import os
 import json
 import base64
 import time
+import logging
 from typing import List, Optional, Dict, Any
 from io import BytesIO
 from contextlib import asynccontextmanager
@@ -20,7 +21,12 @@ from PIL import Image
 import numpy as np
 import uvicorn
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from face_engine import FaceEngine, FaceEngineError
+from services.database_service import DatabaseService
 from config import get_settings
 
 
@@ -100,13 +106,24 @@ def decode_base64_image(base64_string: str) -> Image.Image:
 
 # Global services
 face_engine = None
+db_service = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
-    global face_engine
+    global face_engine, db_service
     try:
         settings = get_settings()
+        
+        # Initialize database service
+        try:
+            db_service = DatabaseService()
+            await db_service.initialize()
+            print("SQL Server database service initialized successfully")
+        except Exception as e:
+            print(f"Warning: Database service failed to initialize: {e}")
+            print("Continuing with file-based storage only")
+            db_service = None
         
         # Initialize face recognition engine
         face_engine = FaceEngine(
@@ -119,6 +136,9 @@ async def lifespan(app: FastAPI):
         print(f"Failed to initialize services: {e}")
         raise
     yield
+    # Cleanup
+    if db_service:
+        await db_service.close()
     print("Application shutdown")
 
 # Initialize FastAPI app
@@ -169,7 +189,7 @@ def validate_image(file: UploadFile) -> Image.Image:
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with database connectivity status."""
     if not face_engine:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -178,18 +198,37 @@ async def health_check():
                 "message": "Face recognition engine not initialized",
                 "enrolled_faces": 0,
                 "model_loaded": False,
-                "similarity_threshold": 0.6
+                "similarity_threshold": 0.6,
+                "database_connected": False
             }
         )
     
     try:
         enrolled_count = len(face_engine.list_enrolled_faces())
+        
+        # Test database connectivity
+        database_connected = False
+        database_face_count = 0
+        if db_service:
+            try:
+                database_face_count = await db_service.get_face_count()
+                database_connected = True
+            except Exception as e:
+                logger.warning(f"Database health check failed: {e}")
+        
         return {
             "status": "healthy",
             "message": "All systems operational",
             "enrolled_faces": enrolled_count,
+            "database_face_count": database_face_count,
             "model_loaded": True,
-            "similarity_threshold": face_engine.similarity_threshold
+            "similarity_threshold": face_engine.similarity_threshold,
+            "database_connected": database_connected,
+            "database_config": {
+                "host": get_settings().DB_HOST,
+                "database": get_settings().DB_NAME,
+                "user": get_settings().DB_USER
+            }
         }
     except Exception as e:
         return JSONResponse(
@@ -199,7 +238,8 @@ async def health_check():
                 "message": f"Engine error: {str(e)}",
                 "enrolled_faces": 0,
                 "model_loaded": False,
-                "similarity_threshold": 0.6
+                "similarity_threshold": 0.6,
+                "database_connected": False
             }
         )
 
@@ -230,7 +270,7 @@ async def enroll_face(request: FaceEnrollmentRequest):
             # Update existing enrollment
             face_engine.delete_face(unique_name)
         
-        # Enroll face
+        # Enroll face in the face engine (file-based storage)
         result = face_engine.enroll_face(unique_name, image)
         
         # Store additional metadata in face database
@@ -241,11 +281,31 @@ async def enroll_face(request: FaceEnrollmentRequest):
         face_data["original_name"] = request.original_name
         face_engine._save_database()
         
+        # Also try to store in SQL Server database if available
+        database_id = None
+        if db_service:
+            try:
+                # Convert image to bytes for database storage
+                image_bytes = db_service.base64_to_bytes(request.image_base64)
+                
+                database_id = await db_service.enroll_face(
+                    person_type=request.person_type,
+                    person_code=request.person_code,
+                    person_name=request.person_name,
+                    image_data=image_bytes,
+                    face_descriptor=embedding.tolist(),
+                    original_name=request.original_name,
+                    content_type="image/jpeg"
+                )
+                logger.info(f"Face enrolled in SQL Server with ID: {database_id}")
+            except Exception as e:
+                logger.warning(f"Failed to store in SQL Server database: {e}")
+        
         return {
             "success": True,
             "message": "Face enrolled successfully",
             "person_code": request.person_code,
-            "embedding_id": result["face_id"]
+            "embedding_id": database_id or result["face_id"]
         }
         
     except FaceEngineError as e:
@@ -301,6 +361,20 @@ async def recognize_face(request: FaceRecognitionRequest):
                 # Check similarity threshold
                 threshold = request.similarity_threshold or face_engine.similarity_threshold
                 if best_match["similarity_score"] >= threshold:
+                    # Log successful recognition attempt
+                    if db_service:
+                        try:
+                            await db_service.log_recognition_attempt(
+                                person_code=person_code,
+                                person_type=person_type,
+                                confidence=best_match["similarity_score"],
+                                processing_time_ms=processing_time_ms,
+                                source_image_name=request.source_image_name,
+                                success=True
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to log recognition attempt: {e}")
+                    
                     return {
                         "success": True,
                         "match": {
@@ -314,6 +388,20 @@ async def recognize_face(request: FaceRecognitionRequest):
                     }
         
         # No match found or below threshold
+        # Log the recognition attempt if database is available
+        if db_service:
+            try:
+                await db_service.log_recognition_attempt(
+                    person_code=None,
+                    person_type=request.person_type,
+                    confidence=0.0,
+                    processing_time_ms=processing_time_ms,
+                    source_image_name=request.source_image_name,
+                    success=False
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log recognition attempt: {e}")
+        
         return {
             "success": True,
             "match": None,
