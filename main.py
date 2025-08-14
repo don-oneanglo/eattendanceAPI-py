@@ -115,15 +115,10 @@ async def lifespan(app: FastAPI):
     try:
         settings = get_settings()
         
-        # Initialize database service
-        try:
-            db_service = DatabaseService()
-            await db_service.initialize()
-            print("MySQL database service initialized successfully")
-        except Exception as e:
-            print(f"Warning: Database service failed to initialize: {e}")
-            print("Continuing with file-based storage only")
-            db_service = None
+        # Initialize MySQL database service (required)
+        db_service = DatabaseService()
+        await db_service.initialize()
+        print("MySQL database service initialized successfully")
         
         # Initialize face recognition engine
         face_engine = FaceEngine(
@@ -204,22 +199,19 @@ async def health_check():
         )
     
     try:
-        enrolled_count = len(face_engine.list_enrolled_faces())
-        
-        # Test database connectivity
+        # Test database connectivity and get face count
         database_connected = False
         database_face_count = 0
-        if db_service:
-            try:
-                database_face_count = await db_service.get_face_count()
-                database_connected = True
-            except Exception as e:
-                logger.warning(f"Database health check failed: {e}")
+        try:
+            database_face_count = await db_service.get_face_count()
+            database_connected = True
+        except Exception as e:
+            logger.warning(f"Database health check failed: {e}")
         
         return {
             "status": "healthy",
             "message": "All systems operational",
-            "enrolled_faces": enrolled_count,
+            "enrolled_faces": database_face_count,
             "database_face_count": database_face_count,
             "model_loaded": True,
             "similarity_threshold": face_engine.similarity_threshold,
@@ -259,53 +251,34 @@ async def enroll_face(request: FaceEnrollmentRequest):
         # Decode and validate image
         image = decode_base64_image(request.image_base64)
         
-        # Extract face embedding
+        # Extract face embedding using the face engine
         embedding, metadata = face_engine.extract_embedding(image)
         
-        # Create unique identifier combining person type and code
-        unique_name = f"{request.person_type}_{request.person_code}"
+        # Convert image to bytes for MySQL database storage
+        image_bytes = db_service.base64_to_bytes(request.image_base64)
         
-        # Check if already enrolled
-        if face_engine.is_name_enrolled(unique_name):
-            # Update existing enrollment
-            face_engine.delete_face(unique_name)
+        # Store in MySQL database
+        database_id = await db_service.enroll_face(
+            person_type=request.person_type,
+            person_code=request.person_code,
+            person_name=request.person_name,
+            image_data=image_bytes,
+            face_descriptor=embedding.tolist(),
+            original_name=request.original_name,
+            content_type="image/jpeg"
+        )
         
-        # Enroll face in the face engine (file-based storage)
-        result = face_engine.enroll_face(unique_name, image)
-        
-        # Store additional metadata in face database
-        face_data = face_engine.faces_db["faces"][unique_name]
-        face_data["person_type"] = request.person_type
-        face_data["person_code"] = request.person_code
-        face_data["person_name"] = request.person_name
-        face_data["original_name"] = request.original_name
-        face_engine._save_database()
-        
-        # Also try to store in SQL Server database if available
-        database_id = None
-        if db_service:
-            try:
-                # Convert image to bytes for database storage
-                image_bytes = db_service.base64_to_bytes(request.image_base64)
-                
-                database_id = await db_service.enroll_face(
-                    person_type=request.person_type,
-                    person_code=request.person_code,
-                    person_name=request.person_name,
-                    image_data=image_bytes,
-                    face_descriptor=embedding.tolist(),
-                    original_name=request.original_name,
-                    content_type="image/jpeg"
-                )
-                logger.info(f"Face enrolled in SQL Server with ID: {database_id}")
-            except Exception as e:
-                logger.warning(f"Failed to store in SQL Server database: {e}")
+        processing_time = int((time.time() - start_time) * 1000)
+        logger.info(f"Face enrolled in MySQL database with ID: {database_id} (took {processing_time}ms)")
         
         return {
             "success": True,
-            "message": "Face enrolled successfully",
+            "message": "Face enrolled successfully in database",
             "person_code": request.person_code,
-            "embedding_id": database_id or result["face_id"]
+            "person_name": request.person_name,
+            "embedding_id": database_id,
+            "processing_time_ms": processing_time,
+            "confidence": metadata["confidence"]
         }
         
     except FaceEngineError as e:
@@ -335,72 +308,54 @@ async def recognize_face(request: FaceRecognitionRequest):
         # Decode and validate image
         image = decode_base64_image(request.image_base64)
         
-        # Perform identification with optional person type filter
-        result = face_engine.identify_face(image)
+        # Extract face embedding from query image
+        query_embedding, metadata = face_engine.extract_embedding(image)
+        
+        # Get all face descriptors from MySQL database
+        database_embeddings = await db_service.get_face_descriptors(request.person_type)
+        
+        # Find best match using face engine
+        threshold = request.similarity_threshold or face_engine.similarity_threshold
+        best_match = face_engine.find_best_match(
+            query_embedding.tolist(), 
+            database_embeddings, 
+            threshold
+        )
         
         processing_time_ms = int((time.time() - start_time) * 1000)
         
-        if result["matches"]:
-            best_match = result["matches"][0]
+        if best_match:
+            # Log successful recognition attempt
+            await db_service.log_recognition_attempt(
+                person_code=best_match["person_code"],
+                person_type=best_match["person_type"],
+                confidence=best_match["confidence"],
+                processing_time_ms=processing_time_ms,
+                source_image_name=request.source_image_name,
+                success=True
+            )
             
-            # Extract person details from the database entry
-            face_data = face_engine.faces_db["faces"].get(best_match["name"])
-            if face_data:
-                person_type = face_data.get("person_type", "unknown")
-                person_code = face_data.get("person_code", best_match["name"])
-                person_name = face_data.get("person_name", best_match["name"])
-                
-                # Filter by person type if specified
-                if request.person_type and person_type != request.person_type:
-                    return {
-                        "success": True,
-                        "match": None,
-                        "processing_time_ms": processing_time_ms
-                    }
-                
-                # Check similarity threshold
-                threshold = request.similarity_threshold or face_engine.similarity_threshold
-                if best_match["similarity_score"] >= threshold:
-                    # Log successful recognition attempt
-                    if db_service:
-                        try:
-                            await db_service.log_recognition_attempt(
-                                person_code=person_code,
-                                person_type=person_type,
-                                confidence=best_match["similarity_score"],
-                                processing_time_ms=processing_time_ms,
-                                source_image_name=request.source_image_name,
-                                success=True
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to log recognition attempt: {e}")
-                    
-                    return {
-                        "success": True,
-                        "match": {
-                            "person_type": person_type,
-                            "person_code": person_code,
-                            "person_name": person_name,
-                            "confidence": best_match["similarity_score"],
-                            "similarity_score": best_match["similarity_score"]
-                        },
-                        "processing_time_ms": processing_time_ms
-                    }
+            return {
+                "success": True,
+                "match": {
+                    "person_type": best_match["person_type"],
+                    "person_code": best_match["person_code"],
+                    "person_name": best_match["person_name"],
+                    "confidence": best_match["confidence"],
+                    "similarity_score": best_match["similarity_score"]
+                },
+                "processing_time_ms": processing_time_ms
+            }
         
         # No match found or below threshold
-        # Log the recognition attempt if database is available
-        if db_service:
-            try:
-                await db_service.log_recognition_attempt(
-                    person_code=None,
-                    person_type=request.person_type,
-                    confidence=0.0,
-                    processing_time_ms=processing_time_ms,
-                    source_image_name=request.source_image_name,
-                    success=False
-                )
-            except Exception as e:
-                logger.warning(f"Failed to log recognition attempt: {e}")
+        await db_service.log_recognition_attempt(
+            person_code=None,
+            person_type=request.person_type,
+            confidence=0.0,
+            processing_time_ms=processing_time_ms,
+            source_image_name=request.source_image_name,
+            success=False
+        )
         
         return {
             "success": True,
@@ -430,31 +385,19 @@ async def list_enrolled_faces(person_type: str):
         )
     
     try:
-        all_faces = face_engine.list_enrolled_faces()
-        
-        if person_type == "all":
-            filtered_faces = all_faces
-        else:
-            # Filter by person type
-            filtered_faces = []
-            for face_info in all_faces:
-                face_data = face_engine.faces_db["faces"].get(face_info["name"])
-                if face_data and face_data.get("person_type") == person_type:
-                    face_info["person_type"] = person_type
-                    face_info["person_code"] = face_data.get("person_code", face_info["name"])
-                    face_info["person_name"] = face_data.get("person_name", face_info["name"])
-                    filtered_faces.append(face_info)
+        # Get enrolled faces from MySQL database
+        faces_from_db = await db_service.get_enrolled_faces(person_type)
         
         # Format response
         formatted_faces = []
-        for face in filtered_faces:
+        for face in faces_from_db:
             formatted_faces.append({
-                "id": hash(face["name"]),  # Simple ID generation
-                "person_type": face.get("person_type", "unknown"),
-                "person_code": face.get("person_code", face["name"]),
-                "person_name": face.get("person_name", face["name"]),
-                "enrollment_date": face["enrollment_date"],
-                "has_image": True
+                "id": face["Id"],
+                "person_type": face["PersonType"],
+                "person_code": face["PersonCode"],
+                "person_name": face["PersonName"],
+                "created_date": face["CreatedDate"],
+                "has_image": face["HasImage"]
             })
         
         return {
@@ -480,14 +423,13 @@ async def delete_face(request: FaceDeleteRequest):
         )
     
     try:
-        unique_name = f"{request.person_type}_{request.person_code}"
-        
-        success = face_engine.delete_face(unique_name)
+        # Delete from MySQL database
+        success = await db_service.delete_face(request.person_type, request.person_code)
         
         if success:
             return {
                 "success": True,
-                "message": "Face enrollment deleted successfully"
+                "message": f"Face enrollment deleted successfully for {request.person_type} {request.person_code}"
             }
         else:
             raise HTTPException(
@@ -595,43 +537,37 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
             # Extract face embedding
             embedding, metadata = face_engine.extract_embedding(image)
             
-            # Create unique identifier
-            unique_name = f"{enrollment.person_type}_{enrollment.person_code}"
+            # Convert image to bytes for MySQL database storage
+            image_bytes = db_service.base64_to_bytes(enrollment.image_base64)
             
-            # Check if already enrolled and update
-            if face_engine.is_name_enrolled(unique_name):
-                face_engine.delete_face(unique_name)
-            
-            # Enroll face
-            result = face_engine.enroll_face(unique_name, image)
-            
-            # Store additional metadata
-            face_data = face_engine.faces_db["faces"][unique_name]
-            face_data["person_type"] = enrollment.person_type
-            face_data["person_code"] = enrollment.person_code
-            face_data["person_name"] = enrollment.person_name
-            face_data["original_name"] = enrollment.original_name
+            # Store in MySQL database
+            database_id = await db_service.enroll_face(
+                person_type=enrollment.person_type,
+                person_code=enrollment.person_code,
+                person_name=enrollment.person_name,
+                image_data=image_bytes,
+                face_descriptor=embedding.tolist(),
+                original_name=enrollment.original_name,
+                content_type="image/jpeg"
+            )
             
             results.append({
                 "person_code": enrollment.person_code,
+                "person_name": enrollment.person_name,
                 "success": True,
-                "message": "Enrolled"
+                "message": "Enrolled successfully",
+                "database_id": database_id
             })
             successful += 1
             
         except Exception as e:
             results.append({
                 "person_code": enrollment.person_code,
+                "person_name": enrollment.person_name,
                 "success": False,
                 "message": str(e)
             })
             failed += 1
-    
-    # Save all changes at once
-    try:
-        face_engine._save_database()
-    except Exception as e:
-        pass  # Log but don't fail the entire batch
     
     return {
         "success": True,
@@ -661,15 +597,34 @@ async def legacy_enroll_face(
     image = validate_image(file)
     
     try:
-        result = face_engine.enroll_face(name, image)
+        # Extract face embedding
+        embedding, metadata = face_engine.extract_embedding(image)
+        
+        # Convert image to bytes
+        from io import BytesIO
+        buffer = BytesIO()
+        image.save(buffer, format='JPEG')
+        image_bytes = buffer.getvalue()
+        
+        # Store in MySQL database (legacy endpoint treats name as person_code)
+        database_id = await db_service.enroll_face(
+            person_type="student",  # Default to student for legacy compatibility
+            person_code=name,
+            person_name=name,
+            image_data=image_bytes,
+            face_descriptor=embedding.tolist(),
+            original_name=file.filename,
+            content_type="image/jpeg"
+        )
+        
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content={
                 "message": f"Successfully enrolled face for '{name}'",
-                "face_id": result["face_id"],
-                "name": result["name"],
-                "bounding_box": result["bounding_box"],
-                "confidence": result["confidence"]
+                "face_id": database_id,
+                "name": name,
+                "bounding_box": metadata["bounding_box"],
+                "confidence": metadata["confidence"]
             }
         )
     except FaceEngineError as e:

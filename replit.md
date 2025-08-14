@@ -5,7 +5,8 @@ This is a Face Recognition API built with Python FastAPI and the InsightFace lib
 ## Recent Updates (January 2025)
 - **✅ MySQL Database Integration**: Successfully connected to user's MySQL database (srv1521.hstgr.io)
 - **✅ Database Schema Support**: Full support for FaceData, Student, Teacher, and AttendanceRecords tables
-- **✅ Dual Storage System**: API works with both file-based storage and MySQL database
+- **✅ MySQL-Only Storage**: Removed all file-based storage, API uses exclusively MySQL database
+- **✅ Schema Compliance**: Strictly follows user's MySQL database schema with proper field mappings
 - **✅ Recognition Logging**: Automatic logging of face recognition attempts with confidence scores
 - **✅ Production Ready**: Fully operational with MySQL connector and connection pooling
 
@@ -27,13 +28,14 @@ Preferred communication style: Simple, everyday language.
 - **Similarity Matching**: Uses cosine similarity with configurable threshold (default 0.6)
 
 ## Data Storage
-- **✅ Dual Storage System**: Both file-based JSON and MySQL database integration (ACTIVE)
+- **✅ MySQL-Only Storage**: Exclusively uses MySQL database (no file-based storage)
 - **✅ MySQL Integration**: Connected to user's database (srv1521.hstgr.io)
-- **✅ Database Schema**: Supports FaceData, Student, Teacher, and AttendanceRecords tables
+- **✅ Database Schema**: Strictly follows FaceData, Student, Teacher, and AttendanceRecords tables
 - **✅ Embedding Storage**: Face embeddings stored as JSON in FaceDescriptor field
 - **✅ Image Storage**: Binary image data stored in ImageData field (LONGBLOB)
 - **✅ Recognition Logging**: Automatic creation of FaceRecognitionLogs table for tracking
 - **✅ Connection Pooling**: MySQL connection pool for optimal performance
+- **✅ Schema Compliance**: All endpoints use proper MySQL field mappings
 
 ## Image Processing
 - **PIL/Pillow**: Handles image format conversion and basic processing

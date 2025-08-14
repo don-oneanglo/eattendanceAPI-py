@@ -1,23 +1,18 @@
 """
 Face recognition engine using InsightFace buffalo_l model.
 Handles face detection, embedding extraction, and similarity matching.
+MySQL database integration only - no file-based storage.
 """
 
 import os
-import json
-import uuid
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
-import shutil
-from urllib.request import urlretrieve
-import gzip
 
 import insightface
 from insightface.app import FaceAnalysis
 import cv2
 from PIL import Image
-import onnxruntime
 
 
 class FaceEngineError(Exception):
@@ -26,7 +21,7 @@ class FaceEngineError(Exception):
 
 
 class FaceEngine:
-    """Face recognition engine using InsightFace."""
+    """Face recognition engine using InsightFace with MySQL database integration only."""
     
     def __init__(self, similarity_threshold: float = 0.6, model_name: str = "buffalo_l"):
         """
@@ -39,19 +34,13 @@ class FaceEngine:
         self.similarity_threshold = similarity_threshold
         self.model_name = model_name
         self.models_dir = "models"
-        self.storage_dir = "storage"
-        self.db_file = os.path.join(self.storage_dir, "faces_db.json")
         
-        # Ensure directories exist
+        # Ensure models directory exists
         os.makedirs(self.models_dir, exist_ok=True)
-        os.makedirs(self.storage_dir, exist_ok=True)
         
         # Initialize face analysis app
         self.app = None
         self._initialize_model()
-        
-        # Load existing database
-        self.faces_db = self._load_database()
     
     def _initialize_model(self):
         """Initialize InsightFace model with automatic download."""
@@ -72,28 +61,6 @@ class FaceEngine:
             
         except Exception as e:
             raise FaceEngineError(f"Failed to initialize face recognition model: {str(e)}")
-    
-    def _load_database(self) -> Dict[str, Any]:
-        """Load faces database from JSON file."""
-        if os.path.exists(self.db_file):
-            try:
-                with open(self.db_file, 'r') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Warning: Could not load database file, starting fresh: {e}")
-                return {"faces": {}, "metadata": {"created": datetime.now().isoformat()}}
-        else:
-            # Create initial database structure
-            return {"faces": {}, "metadata": {"created": datetime.now().isoformat()}}
-    
-    def _save_database(self):
-        """Save faces database to JSON file."""
-        try:
-            self.faces_db["metadata"]["last_updated"] = datetime.now().isoformat()
-            with open(self.db_file, 'w') as f:
-                json.dump(self.faces_db, f, indent=2, default=str)
-        except IOError as e:
-            raise FaceEngineError(f"Failed to save database: {str(e)}")
     
     def _image_to_cv2(self, image: Image.Image) -> np.ndarray:
         """Convert PIL Image to OpenCV format."""
@@ -170,48 +137,24 @@ class FaceEngine:
         # Embeddings from InsightFace are already normalized
         return float(np.dot(embedding1, embedding2))
     
-    def enroll_face(self, name: str, image: Image.Image) -> Dict[str, Any]:
+    def extract_face_data(self, image: Image.Image) -> Dict[str, Any]:
         """
-        Enroll a new face in the database.
+        Extract face data from image for MySQL database storage.
         
         Args:
-            name: Unique identifier for the person
             image: PIL Image containing the face
             
         Returns:
-            Enrollment result with face ID and metadata
+            Face data including embedding and metadata
         """
-        if self.is_name_enrolled(name):
-            raise FaceEngineError(f"Person with name '{name}' is already enrolled")
-        
         # Extract embedding and metadata
         embedding, metadata = self.extract_embedding(image)
         
-        # Generate unique face ID
-        face_id = str(uuid.uuid4())
-        
-        # Save to database
-        face_data = {
-            "face_id": face_id,
-            "name": name,
+        return {
             "embedding": embedding.tolist(),
             "metadata": metadata,
-            "enrollment_date": datetime.now().isoformat(),
+            "extraction_date": datetime.now().isoformat(),
             "image_size": image.size
-        }
-        
-        self.faces_db["faces"][name] = face_data
-        self._save_database()
-        
-        # Save image file
-        image_path = os.path.join(self.storage_dir, f"{face_id}.jpg")
-        image.save(image_path, "JPEG", quality=95)
-        
-        return {
-            "face_id": face_id,
-            "name": name,
-            "bounding_box": metadata["bounding_box"],
-            "confidence": metadata["confidence"]
         }
     
     def verify_faces(self, image1: Image.Image, image2: Image.Image) -> Dict[str, Any]:
@@ -243,129 +186,68 @@ class FaceEngine:
             "confidence2": metadata2["confidence"]
         }
     
-    def identify_face(self, image: Image.Image) -> Dict[str, Any]:
+    def compare_embeddings(self, embedding1: List[float], embedding2: List[float]) -> float:
         """
-        Identify a face by searching the enrolled faces database.
+        Compare two face embeddings and return similarity score.
         
         Args:
-            image: PIL Image containing the face to identify
+            embedding1: First face embedding as list
+            embedding2: Second face embedding as list
             
         Returns:
-            Identification result with top 3 matches
+            Cosine similarity score between 0 and 1
         """
-        if not self.faces_db["faces"]:
-            return {
-                "matches": [],
-                "bounding_box": None,
-                "confidence": None,
-                "total_enrolled": 0
-            }
-        
-        # Extract embedding from query image
-        query_embedding, metadata = self.extract_embedding(image)
-        
-        # Calculate similarities with all enrolled faces
-        similarities = []
-        for name, face_data in self.faces_db["faces"].items():
-            enrolled_embedding = np.array(face_data["embedding"])
-            similarity = self._cosine_similarity(query_embedding, enrolled_embedding)
-            
-            similarities.append({
-                "name": name,
-                "similarity_score": float(similarity),
-                "is_match": similarity >= self.similarity_threshold,
-                "face_id": face_data["face_id"],
-                "enrollment_date": face_data["enrollment_date"]
-            })
-        
-        # Sort by similarity score (descending) and get top 3
-        similarities.sort(key=lambda x: x["similarity_score"], reverse=True)
-        top_matches = similarities[:3]
-        
-        return {
-            "matches": top_matches,
-            "bounding_box": metadata["bounding_box"],
-            "confidence": metadata["confidence"],
-            "total_enrolled": len(self.faces_db["faces"])
-        }
+        emb1 = np.array(embedding1)
+        emb2 = np.array(embedding2)
+        return self._cosine_similarity(emb1, emb2)
     
-    def list_enrolled_faces(self) -> List[Dict[str, Any]]:
+    def find_best_match(self, query_embedding: List[float], database_embeddings: List[Dict[str, Any]], 
+                       threshold: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """
-        Get list of all enrolled faces.
-        
-        Returns:
-            List of enrolled faces with metadata
-        """
-        faces_list = []
-        for name, face_data in self.faces_db["faces"].items():
-            face_info = {
-                "name": name,
-                "face_id": face_data["face_id"],
-                "enrollment_date": face_data["enrollment_date"],
-                "bounding_box": face_data["metadata"]["bounding_box"],
-                "confidence": face_data["metadata"]["confidence"],
-                "image_size": face_data.get("image_size"),
-                "age": face_data["metadata"].get("age"),
-                "gender": face_data["metadata"].get("gender")
-            }
-            faces_list.append(face_info)
-        
-        # Sort by enrollment date (newest first)
-        faces_list.sort(key=lambda x: x["enrollment_date"], reverse=True)
-        return faces_list
-    
-    def delete_face(self, name: str) -> bool:
-        """
-        Delete an enrolled face from the database.
+        Find the best matching face from database embeddings.
         
         Args:
-            name: Name of the person to delete
+            query_embedding: Face embedding to search for
+            database_embeddings: List of database face records with embeddings
+            threshold: Similarity threshold (uses default if None)
             
         Returns:
-            True if deletion was successful, False if name not found
+            Best match information or None if no match
         """
-        if name not in self.faces_db["faces"]:
-            return False
+        if threshold is None:
+            threshold = self.similarity_threshold
         
-        # Get face data before deletion
-        face_data = self.faces_db["faces"][name]
-        face_id = face_data["face_id"]
+        best_match = None
+        best_score = 0.0
         
-        # Remove from database
-        del self.faces_db["faces"][name]
-        self._save_database()
+        query_emb = np.array(query_embedding)
         
-        # Remove image file if it exists
-        image_path = os.path.join(self.storage_dir, f"{face_id}.jpg")
-        if os.path.exists(image_path):
-            try:
-                os.remove(image_path)
-            except OSError:
-                print(f"Warning: Could not remove image file {image_path}")
+        for db_face in database_embeddings:
+            if not db_face.get('FaceDescriptor'):
+                continue
+            
+            db_embedding = np.array(db_face['FaceDescriptor'])
+            similarity = self._cosine_similarity(query_emb, db_embedding)
+            
+            if similarity > best_score and similarity >= threshold:
+                best_score = similarity
+                best_match = {
+                    "person_type": db_face['PersonType'],
+                    "person_code": db_face['PersonCode'],
+                    "person_name": db_face['PersonName'],
+                    "similarity_score": similarity,
+                    "confidence": similarity,  # For compatibility
+                    "database_id": db_face['Id']
+                }
         
-        return True
+        return best_match
     
-    def is_name_enrolled(self, name: str) -> bool:
-        """Check if a name is already enrolled."""
-        return name in self.faces_db["faces"]
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get database statistics."""
-        total_faces = len(self.faces_db["faces"])
-        
-        ages = [face_data["metadata"].get("age") for face_data in self.faces_db["faces"].values() 
-                if face_data["metadata"].get("age") is not None]
-        
-        genders = [face_data["metadata"].get("gender") for face_data in self.faces_db["faces"].values() 
-                   if face_data["metadata"].get("gender") is not None]
-        
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get information about the loaded model."""
         return {
-            "total_enrolled": total_faces,
-            "average_age": sum(ages) / len(ages) if ages else None,
-            "gender_distribution": {
-                "male": sum(1 for g in genders if g == 1),
-                "female": sum(1 for g in genders if g == 0)
-            } if genders else None,
+            "model_name": self.model_name,
             "similarity_threshold": self.similarity_threshold,
-            "model_name": self.model_name
+            "models_directory": self.models_dir,
+            "is_initialized": self.app is not None,
+            "providers": ['CPUExecutionProvider']
         }
