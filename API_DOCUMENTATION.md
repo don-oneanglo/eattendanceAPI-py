@@ -1,106 +1,165 @@
-# InsightFace Attendance API Documentation
+# Face Recognition API Documentation
 
 ## Overview
-A complete Python FastAPI backend for face recognition using the InsightFace library, designed to replace face-api.js with server-side processing. The API includes face enrollment, verification, identification, and management capabilities with comprehensive endpoint support.
 
-## Base URL
-```
-http://0.0.0.0:5000
-```
+This is a complete Python FastAPI backend for face recognition using the InsightFace library. The API provides face enrollment, verification, and identification capabilities using the high-accuracy buffalo_l model. All data is stored exclusively in MySQL database with no file-based storage.
+
+**Base URL**: `http://localhost:5000` (or your deployed URL)  
+**Database**: MySQL (srv1521.hstgr.io)  
+**Model**: InsightFace buffalo_l  
+**Storage**: MySQL database only  
 
 ## Authentication
-Currently, no authentication is required for API endpoints.
 
-## API Endpoints
+Currently, no authentication is required for API endpoints. All endpoints are publicly accessible.
 
-### Health Check
-- **GET** `/api/health`
-- **GET** `/` (Basic info)
+## System Status
 
-### Face Management
-- **POST** `/api/face/enroll` - Enroll a new face
-- **POST** `/api/face/recognize` - Recognize a face
-- **GET** `/api/face/list/{person_type}` - List enrolled faces
-- **DELETE** `/api/face/delete` - Delete a face enrollment
-- **POST** `/api/face/quality-check` - Assess image quality
-- **POST** `/api/face/batch-enroll` - Batch enroll multiple faces
+### GET `/api/health`
 
-### Legacy Compatibility
-- **POST** `/enroll` - Legacy face enrollment
-- **POST** `/identify` - Legacy face identification
-- **GET** `/faces` - Legacy list faces
-- **DELETE** `/faces/{name}` - Legacy delete face
+Check the health status of the API and database connectivity.
 
-## Request/Response Formats
+**Response Example:**
+```json
+{
+  "status": "healthy",
+  "message": "All systems operational",
+  "enrolled_faces": 0,
+  "database_face_count": 0,
+  "model_loaded": true,
+  "similarity_threshold": 0.6,
+  "database_connected": true,
+  "database_config": {
+    "host": "srv1521.hstgr.io",
+    "database": "u311154254_TestAttendance",
+    "user": "u311154254_TADB"
+  }
+}
+```
 
-### Face Enrollment
-**POST** `/api/face/enroll`
+### GET `/`
 
-Request body:
+Get basic API information and available endpoints.
+
+**Response Example:**
+```json
+{
+  "message": "InsightFace Attendance API",
+  "status": "running",
+  "version": "2.0.0",
+  "engine_initialized": true,
+  "endpoints": {
+    "health": "/api/health",
+    "enroll": "/api/face/enroll",
+    "recognize": "/api/face/recognize",
+    "list": "/api/face/list/{person_type}",
+    "delete": "/api/face/delete",
+    "quality_check": "/api/face/quality-check",
+    "batch_enroll": "/api/face/batch-enroll",
+    "docs": "/docs"
+  }
+}
+```
+
+## Face Management
+
+### POST `/api/face/enroll`
+
+Enroll a new face in the system. Stores face embedding and image data in MySQL database.
+
+**Request Body:**
 ```json
 {
   "person_type": "student",
-  "person_code": "ST001",
+  "person_code": "STU001",
   "person_name": "John Doe",
-  "image_base64": "data:image/jpeg;base64,/9j/4AAQ...",
+  "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
   "original_name": "john_photo.jpg"
 }
 ```
 
-Response:
+**Request Fields:**
+- `person_type` (string): Type of person ("student" or "teacher")
+- `person_code` (string): Unique identifier for the person
+- `person_name` (string): Full name of the person
+- `image_base64` (string): Base64 encoded image with data URL prefix
+- `original_name` (string, optional): Original filename of the image
+
+**Response Example:**
 ```json
 {
   "success": true,
-  "message": "Face enrolled successfully",
-  "person_code": "ST001",
-  "embedding_id": 1234
+  "message": "Face enrolled successfully in database",
+  "person_code": "STU001",
+  "person_name": "John Doe",
+  "embedding_id": 123,
+  "processing_time_ms": 245,
+  "confidence": 0.95
 }
 ```
 
-### Face Recognition
-**POST** `/api/face/recognize`
+### POST `/api/face/recognize`
 
-Request body:
+Recognize a face from the enrolled database.
+
+**Request Body:**
 ```json
 {
-  "image_base64": "data:image/jpeg;base64,/9j/4AAQ...",
+  "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
   "person_type": "student",
   "similarity_threshold": 0.6,
-  "source_image_name": "test_image.jpg"
+  "source_image_name": "camera_capture.jpg"
 }
 ```
 
-Response:
+**Request Fields:**
+- `image_base64` (string): Base64 encoded image with data URL prefix
+- `person_type` (string, optional): Filter by person type ("student" or "teacher")
+- `similarity_threshold` (float, optional): Custom similarity threshold (default: 0.6)
+- `source_image_name` (string, optional): Name/source of the image for logging
+
+**Response Example (Match Found):**
 ```json
 {
   "success": true,
   "match": {
     "person_type": "student",
-    "person_code": "ST001",
+    "person_code": "STU001",
     "person_name": "John Doe",
-    "confidence": 0.85,
-    "similarity_score": 0.85
+    "confidence": 0.87,
+    "similarity_score": 0.87
   },
-  "processing_time_ms": 250
+  "processing_time_ms": 156
 }
 ```
 
-### List Enrolled Faces
-**GET** `/api/face/list/{person_type}`
+**Response Example (No Match):**
+```json
+{
+  "success": true,
+  "match": null,
+  "processing_time_ms": 142
+}
+```
 
-- `person_type`: "student", "teacher", or "all"
+### GET `/api/face/list/{person_type}`
 
-Response:
+List enrolled faces by person type.
+
+**Parameters:**
+- `person_type` (path): Person type to filter ("student", "teacher", or "all")
+
+**Response Example:**
 ```json
 {
   "success": true,
   "faces": [
     {
-      "id": 1234,
+      "id": 123,
       "person_type": "student",
-      "person_code": "ST001",
+      "person_code": "STU001",
       "person_name": "John Doe",
-      "enrollment_date": "2024-01-15T10:30:00",
+      "created_date": "2025-01-14T10:30:00",
       "has_image": true
     }
   ],
@@ -108,22 +167,45 @@ Response:
 }
 ```
 
-### Face Quality Check
-**POST** `/api/face/quality-check`
+### DELETE `/api/face/delete`
 
-Request body:
+Delete a face enrollment from the database.
+
+**Request Body:**
 ```json
 {
-  "image_base64": "data:image/jpeg;base64,/9j/4AAQ..."
+  "person_type": "student",
+  "person_code": "STU001"
 }
 ```
 
-Response:
+**Response Example:**
+```json
+{
+  "success": true,
+  "message": "Face enrollment deleted successfully for student STU001"
+}
+```
+
+## Face Analysis
+
+### POST `/api/face/quality-check`
+
+Assess the quality of a face image before enrollment.
+
+**Request Body:**
+```json
+{
+  "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
+}
+```
+
+**Response Example:**
 ```json
 {
   "success": true,
   "quality": {
-    "score": 0.85,
+    "score": 0.9,
     "face_detected": true,
     "face_count": 1,
     "face_size": "adequate",
@@ -134,164 +216,164 @@ Response:
 }
 ```
 
-### Delete Face
-**DELETE** `/api/face/delete`
+**Quality Recommendations:**
+- `suitable_for_enrollment`: High quality, recommended for enrollment
+- `acceptable_with_caution`: Medium quality, may work but not optimal
+- `not_suitable`: Poor quality, should not be used for enrollment
 
-Request body:
-```json
-{
-  "person_type": "student",
-  "person_code": "ST001"
-}
-```
+## Batch Operations
 
-Response:
-```json
-{
-  "success": true,
-  "message": "Face enrollment deleted successfully"
-}
-```
+### POST `/api/face/batch-enroll`
 
-### Batch Enrollment
-**POST** `/api/face/batch-enroll`
+Enroll multiple faces in a single request.
 
-Request body:
+**Request Body:**
 ```json
 {
   "enrollments": [
     {
       "person_type": "student",
-      "person_code": "ST001",
+      "person_code": "STU001",
       "person_name": "John Doe",
-      "image_base64": "data:image/jpeg;base64,/9j/4AAQ...",
+      "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
       "original_name": "john.jpg"
     },
     {
-      "person_type": "teacher",
-      "person_code": "TC001",
+      "person_type": "student",
+      "person_code": "STU002",
       "person_name": "Jane Smith",
-      "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-      "original_name": "jane.png"
+      "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
+      "original_name": "jane.jpg"
     }
   ]
 }
 ```
 
-Response:
+**Response Example:**
 ```json
 {
   "success": true,
   "results": [
     {
-      "person_code": "ST001",
+      "person_code": "STU001",
+      "person_name": "John Doe",
       "success": true,
-      "message": "Enrolled"
+      "message": "Enrolled successfully",
+      "database_id": 123
     },
     {
-      "person_code": "TC001",
-      "success": true,
-      "message": "Enrolled"
+      "person_code": "STU002",
+      "person_name": "Jane Smith",
+      "success": false,
+      "message": "No faces detected in the image"
     }
   ],
   "summary": {
     "total": 2,
-    "successful": 2,
-    "failed": 0
+    "successful": 1,
+    "failed": 1
   }
 }
 ```
+
+## Legacy Endpoints
+
+For backward compatibility with older frontends:
+
+### POST `/enroll`
+
+Legacy face enrollment endpoint using form data.
+
+**Request (Form Data):**
+- `name` (string): Person name/code
+- `file` (file): Image file (JPG/PNG)
+
+### POST `/identify`
+
+Legacy face identification endpoint using form data.
+
+**Request (Form Data):**
+- `file` (file): Image file to identify
 
 ## Error Responses
 
-All errors follow this format:
+All endpoints return consistent error responses:
+
+**400 Bad Request:**
 ```json
 {
-  "success": false,
-  "error_code": "INVALID_IMAGE",
-  "message": "No faces detected in the image",
-  "details": {
-    "additional_info": "value"
-  }
+  "detail": "No faces detected in the image"
 }
 ```
 
-Common error codes:
-- `INVALID_IMAGE` - Image format or quality issues
-- `NO_FACE_DETECTED` - No face found in image
-- `MULTIPLE_FACES` - Multiple faces detected (enrollment only)
-- `PERSON_ALREADY_EXISTS` - Person already enrolled
-- `PERSON_NOT_FOUND` - Person not found for deletion
-- `ENGINE_NOT_INITIALIZED` - Face recognition engine not ready
+**404 Not Found:**
+```json
+{
+  "detail": "No enrollment found for student STU001"
+}
+```
+
+**500 Internal Server Error:**
+```json
+{
+  "detail": "Internal server error: Database connection failed"
+}
+```
+
+**503 Service Unavailable:**
+```json
+{
+  "detail": "Face recognition engine not initialized"
+}
+```
 
 ## Image Requirements
 
-### Supported Formats
-- JPEG (.jpg, .jpeg)
-- PNG (.png)
-- Base64 encoded with data URI format
+- **Formats**: JPG, JPEG, PNG
+- **Encoding**: Base64 with data URL prefix (e.g., `data:image/jpeg;base64,`)
+- **Face Count**: Exactly one face per image
+- **Quality**: Clear, well-lit images work best
+- **Size**: No strict size limits, but reasonable file sizes recommended
 
-### Quality Guidelines
-- **Resolution**: Minimum 200x200 pixels
-- **Face Size**: At least 80x80 pixels
-- **Quality**: Clear, well-lit images
-- **Orientation**: Frontal face view preferred
-- **Background**: Any background acceptable
-- **Multiple Faces**: Only one face per enrollment image
+## Database Schema
 
-### Base64 Format
-Images must be provided as base64 data URIs:
-```
-data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD...
-```
+The API uses the following MySQL database tables:
 
-## Configuration
+### FaceData Table
+- `Id` (INT, Primary Key): Unique face record ID
+- `PersonType` (VARCHAR): "student" or "teacher"
+- `PersonCode` (VARCHAR): Unique person identifier
+- `PersonName` (VARCHAR): Full name of the person
+- `ImageData` (LONGBLOB): Binary image data
+- `FaceDescriptor` (JSON): Face embedding as JSON array
+- `OriginalName` (VARCHAR): Original filename
+- `ContentType` (VARCHAR): Image MIME type
+- `CreatedDate` (DATETIME): Enrollment timestamp
+- `HasImage` (BOOLEAN): Whether image data is stored
 
-### Environment Variables
-- `SIMILARITY_THRESHOLD`: Default similarity threshold (0.6)
-- `FACE_CONFIDENCE_THRESHOLD`: Minimum face detection confidence (0.7)
-- `MAX_IMAGE_SIZE_MB`: Maximum image size in MB (10)
-- `PROCESSING_TIMEOUT_SECONDS`: Processing timeout (30)
+### FaceRecognitionLogs Table
+- `Id` (INT, Primary Key): Log entry ID
+- `PersonCode` (VARCHAR): Recognized person code (null if no match)
+- `PersonType` (VARCHAR): Person type filter used
+- `Confidence` (FLOAT): Recognition confidence score
+- `ProcessingTimeMs` (INT): Processing time in milliseconds
+- `SourceImageName` (VARCHAR): Source image identifier
+- `Success` (BOOLEAN): Whether recognition was successful
+- `CreatedDate` (DATETIME): Recognition attempt timestamp
 
-### Model Information
-- **Model**: InsightFace buffalo_l
-- **Embedding Size**: 512 dimensions
-- **Similarity Metric**: Cosine similarity
-- **Detection Engine**: ONNX Runtime with CPU provider
+## Rate Limiting
 
-## Performance
+Currently, no rate limiting is implemented. Consider implementing rate limiting for production use.
 
-### Typical Response Times
-- Face Enrollment: 200-500ms
-- Face Recognition: 150-300ms
-- Quality Check: 100-200ms
-- List Faces: <50ms
+## Performance Notes
 
-### Throughput
-- Concurrent requests supported: 10
-- Rate limiting: 100 requests/minute (configurable)
+- Face embedding extraction: ~200-500ms per image
+- Face recognition: ~100-300ms per query
+- Database operations: ~10-50ms per query
+- Batch operations: Processed sequentially, not in parallel
 
-## Migration from face-api.js
+## Development
 
-This API provides full compatibility for migrating from face-api.js:
-
-1. **Detection**: Use `/api/face/quality-check` instead of face detection
-2. **Recognition**: Use `/api/face/recognize` instead of face matching
-3. **Descriptors**: Handled automatically with 512-dim embeddings
-4. **Database**: File-based storage with JSON format
-
-### Key Differences
-- Server-side processing (more accurate, faster)
-- No browser compatibility concerns
-- Centralized model management
-- Better security and performance
-- RESTful API instead of JavaScript library
-
-## Testing
-
-Use the automatic API documentation at:
-```
-http://0.0.0.0:5000/docs
-```
-
-This provides an interactive interface for testing all endpoints with example requests and responses.
+- **Interactive Documentation**: Available at `/docs` (Swagger UI)
+- **Health Monitoring**: Use `/api/health` for system status
+- **Logging**: All operations are logged with timestamps and confidence scores
