@@ -755,7 +755,15 @@ if __name__ == "__main__":
     os.makedirs("storage", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    # Run the application on port 5000 for Replit compatibility
+    # Check if running locally or on Replit
+    is_replit = os.getenv('REPLIT_DB_URL') is not None
+    
+    print(f"Starting Face Recognition API...")
+    print(f"Environment: {'Replit' if is_replit else 'Local'}")
+    print(f"Database Host: {get_settings().DB_HOST}")
+    print(f"Server will be available at: http://0.0.0.0:5000")
+
+    # Run the application on port 5000
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

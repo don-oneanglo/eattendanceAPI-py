@@ -43,11 +43,22 @@ class Settings:
     
     def __init__(self):
         """Initialize settings with environment variables."""
-        # Use your provided MySQL database configuration
-        self.DB_HOST = os.getenv("DB_HOST", "srv1521.hstgr.io")
-        self.DB_USER = os.getenv("DB_USER", "u311154254_TADB") 
-        self.DB_PASSWORD = os.getenv("DB_PASSWORD", "Anglo!123456")
-        self.DB_NAME = os.getenv("DB_NAME", "u311154254_TestAttendance")
+        # Check if we're running locally and should use local database
+        use_local_db = os.getenv("USE_LOCAL_DB", "false").lower() == "true"
+        
+        if use_local_db:
+            # Local MySQL configuration
+            self.DB_HOST = os.getenv("DB_HOST", "localhost")
+            self.DB_USER = os.getenv("DB_USER", "root") 
+            self.DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+            self.DB_NAME = os.getenv("DB_NAME", "face_recognition")
+        else:
+            # Use your provided MySQL database configuration
+            self.DB_HOST = os.getenv("DB_HOST", "srv1521.hstgr.io")
+            self.DB_USER = os.getenv("DB_USER", "u311154254_TADB") 
+            self.DB_PASSWORD = os.getenv("DB_PASSWORD", "Anglo!123456")
+            self.DB_NAME = os.getenv("DB_NAME", "u311154254_TestAttendance")
+            
         self.DB_CHARSET = os.getenv("DB_CHARSET", "utf8mb4")
         self.DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
         
