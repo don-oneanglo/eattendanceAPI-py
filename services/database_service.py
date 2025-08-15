@@ -69,7 +69,7 @@ class DatabaseService:
             return True
         except Exception as e:
             logger.error(f"MySQL database connection test failed: {e}")
-            raise
+            return False
     
     async def close(self):
         """Close database connections."""
@@ -373,6 +373,16 @@ class DatabaseService:
         finally:
             if connection:
                 connection.close()
+    
+    async def is_connected(self) -> bool:
+        """Check if database is connected and accessible."""
+        try:
+            if not self.pool or not MYSQL_AVAILABLE:
+                return False
+            return await self.test_connection()
+        except Exception as e:
+            logger.error(f"Database connection check failed: {e}")
+            return False
     
     def base64_to_bytes(self, base64_string: str) -> bytes:
         """Convert base64 string to bytes for database storage."""

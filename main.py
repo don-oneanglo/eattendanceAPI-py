@@ -37,7 +37,7 @@ class FaceEnrollmentRequest(BaseModel):
     person_name: str = Field(..., min_length=1, max_length=200)
     image_base64: str = Field(..., description="Base64 encoded image")
     original_name: Optional[str] = None
-    
+
     @validator('image_base64')
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
@@ -50,7 +50,7 @@ class FaceRecognitionRequest(BaseModel):
     person_type: Optional[str] = Field(None, pattern="^(student|teacher)$")
     similarity_threshold: Optional[float] = Field(0.6, ge=0.0, le=1.0)
     source_image_name: Optional[str] = None
-    
+
     @validator('image_base64')
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
@@ -65,7 +65,7 @@ class FaceDeleteRequest(BaseModel):
 
 class FaceQualityRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image")
-    
+
     @validator('image_base64')
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
@@ -90,13 +90,13 @@ def decode_base64_image(base64_string: str) -> Image.Image:
     try:
         if base64_string.startswith('data:image/'):
             base64_string = base64_string.split(',')[1]
-        
+
         image_bytes = base64.b64decode(base64_string)
         image = Image.open(BytesIO(image_bytes))
-        
+
         if image.mode != 'RGB':
             image = image.convert('RGB')
-        
+
         return image
     except Exception as e:
         raise HTTPException(
@@ -114,19 +114,19 @@ async def lifespan(app: FastAPI):
     global face_engine, db_service
     try:
         settings = get_settings()
-        
+
         # Initialize MySQL database service (required)
         db_service = DatabaseService()
         await db_service.initialize()
         print("MySQL database service initialized successfully")
-        
+
         # Initialize face recognition engine
         face_engine = FaceEngine(
             similarity_threshold=settings.SIMILARITY_THRESHOLD,
             model_name=settings.INSIGHTFACE_MODEL
         )
         print("Face recognition engine initialized successfully")
-        
+
     except Exception as e:
         print(f"Failed to initialize services: {e}")
         raise
@@ -161,13 +161,13 @@ def validate_image(file: UploadFile) -> Image.Image:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File must be an image (JPG or PNG)"
         )
-    
+
     if file.content_type not in ['image/jpeg', 'image/jpg', 'image/png']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only JPG and PNG images are supported"
         )
-    
+
     try:
         image = Image.open(BytesIO(file.file.read()))
         if image.mode != 'RGB':
@@ -197,21 +197,28 @@ async def health_check():
                 "database_connected": False
             }
         )
-    
+
     try:
-        # Test database connectivity and get face count
-        database_connected = False
+        # Get face count from file system
+        enrolled_faces = face_engine.get_face_count()
+
+        # Try to get database face count and connection status
         database_face_count = 0
-        try:
-            database_face_count = await db_service.get_face_count()
-            database_connected = True
-        except Exception as e:
-            logger.warning(f"Database health check failed: {e}")
-        
+        database_connected = False
+
+        if db_service:
+            try:
+                database_connected = await db_service.is_connected()
+                if database_connected:
+                    database_face_count = await db_service.get_face_count()
+            except Exception as e:
+                logger.warning(f"Database not available for health check: {e}")
+                database_connected = False
+
         return {
             "status": "healthy",
             "message": "All systems operational",
-            "enrolled_faces": database_face_count,
+            "enrolled_faces": enrolled_faces,
             "database_face_count": database_face_count,
             "model_loaded": True,
             "similarity_threshold": face_engine.similarity_threshold,
@@ -229,6 +236,7 @@ async def health_check():
                 "status": "unhealthy",
                 "message": f"Engine error: {str(e)}",
                 "enrolled_faces": 0,
+                "database_face_count": 0,
                 "model_loaded": False,
                 "similarity_threshold": 0.6,
                 "database_connected": False
@@ -244,19 +252,19 @@ async def enroll_face(request: FaceEnrollmentRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     start_time = time.time()
-    
+
     try:
         # Decode and validate image
         image = decode_base64_image(request.image_base64)
-        
+
         # Extract face embedding using the face engine
         embedding, metadata = face_engine.extract_embedding(image)
-        
+
         # Convert image to bytes for MySQL database storage
         image_bytes = db_service.base64_to_bytes(request.image_base64)
-        
+
         # Store in MySQL database
         database_id = await db_service.enroll_face(
             person_type=request.person_type,
@@ -267,10 +275,10 @@ async def enroll_face(request: FaceEnrollmentRequest):
             original_name=request.original_name,
             content_type="image/jpeg"
         )
-        
+
         processing_time = int((time.time() - start_time) * 1000)
         logger.info(f"Face enrolled in MySQL database with ID: {database_id} (took {processing_time}ms)")
-        
+
         return {
             "success": True,
             "message": "Face enrolled successfully in database",
@@ -280,7 +288,7 @@ async def enroll_face(request: FaceEnrollmentRequest):
             "processing_time_ms": processing_time,
             "confidence": metadata["confidence"]
         }
-        
+
     except FaceEngineError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -301,29 +309,29 @@ async def recognize_face(request: FaceRecognitionRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     start_time = time.time()
-    
+
     try:
         # Decode and validate image
         image = decode_base64_image(request.image_base64)
-        
+
         # Extract face embedding from query image
         query_embedding, metadata = face_engine.extract_embedding(image)
-        
+
         # Get all face descriptors from MySQL database
         database_embeddings = await db_service.get_face_descriptors(request.person_type)
-        
+
         # Find best match using face engine
         threshold = request.similarity_threshold or face_engine.similarity_threshold
         best_match = face_engine.find_best_match(
-            query_embedding.tolist(), 
-            database_embeddings, 
+            query_embedding.tolist(),
+            database_embeddings,
             threshold
         )
-        
+
         processing_time_ms = int((time.time() - start_time) * 1000)
-        
+
         if best_match:
             # Log successful recognition attempt
             await db_service.log_recognition_attempt(
@@ -334,7 +342,7 @@ async def recognize_face(request: FaceRecognitionRequest):
                 source_image_name=request.source_image_name,
                 success=True
             )
-            
+
             return {
                 "success": True,
                 "match": {
@@ -346,7 +354,7 @@ async def recognize_face(request: FaceRecognitionRequest):
                 },
                 "processing_time_ms": processing_time_ms
             }
-        
+
         # No match found or below threshold
         await db_service.log_recognition_attempt(
             person_code=None,
@@ -356,13 +364,13 @@ async def recognize_face(request: FaceRecognitionRequest):
             source_image_name=request.source_image_name,
             success=False
         )
-        
+
         return {
             "success": True,
             "match": None,
             "processing_time_ms": processing_time_ms
         }
-        
+
     except FaceEngineError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -383,11 +391,11 @@ async def list_enrolled_faces(person_type: str):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     try:
         # Get enrolled faces from MySQL database
         faces_from_db = await db_service.get_enrolled_faces(person_type)
-        
+
         # Format response
         formatted_faces = []
         for face in faces_from_db:
@@ -399,13 +407,13 @@ async def list_enrolled_faces(person_type: str):
                 "created_date": face["CreatedDate"],
                 "has_image": face["HasImage"]
             })
-        
+
         return {
             "success": True,
             "faces": formatted_faces,
             "total_count": len(formatted_faces)
         }
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -421,11 +429,11 @@ async def delete_face(request: FaceDeleteRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     try:
         # Delete from MySQL database
         success = await db_service.delete_face(request.person_type, request.person_code)
-        
+
         if success:
             return {
                 "success": True,
@@ -436,7 +444,7 @@ async def delete_face(request: FaceDeleteRequest):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No enrollment found for {request.person_type} {request.person_code}"
             )
-            
+
     except HTTPException:
         raise
     except Exception as e:
@@ -454,19 +462,19 @@ async def assess_face_quality(request: FaceQualityRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     try:
         image = decode_base64_image(request.image_base64)
-        
+
         # Perform basic quality assessment
         try:
             embedding, metadata = face_engine.extract_embedding(image)
-            
+
             # Calculate quality metrics
             face_detected = True
             face_count = metadata.get("face_count", 1)
             confidence = metadata.get("confidence", 0.0)
-            
+
             # Determine quality score based on detection confidence
             if confidence >= 0.9:
                 score = 0.9
@@ -486,7 +494,7 @@ async def assess_face_quality(request: FaceQualityRequest):
                 face_size = "small"
                 brightness = "poor"
                 blur_level = "high"
-            
+
         except FaceEngineError:
             face_detected = False
             face_count = 0
@@ -495,7 +503,7 @@ async def assess_face_quality(request: FaceQualityRequest):
             face_size = "unknown"
             brightness = "unknown"
             blur_level = "unknown"
-        
+
         return {
             "success": True,
             "quality": {
@@ -508,7 +516,7 @@ async def assess_face_quality(request: FaceQualityRequest):
                 "recommendation": recommendation
             }
         }
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -524,22 +532,22 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     results = []
     successful = 0
     failed = 0
-    
+
     for enrollment in request.enrollments:
         try:
             # Decode and validate image
             image = decode_base64_image(enrollment.image_base64)
-            
+
             # Extract face embedding
             embedding, metadata = face_engine.extract_embedding(image)
-            
+
             # Convert image to bytes for MySQL database storage
             image_bytes = db_service.base64_to_bytes(enrollment.image_base64)
-            
+
             # Store in MySQL database
             database_id = await db_service.enroll_face(
                 person_type=enrollment.person_type,
@@ -550,7 +558,7 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
                 original_name=enrollment.original_name,
                 content_type="image/jpeg"
             )
-            
+
             results.append({
                 "person_code": enrollment.person_code,
                 "person_name": enrollment.person_name,
@@ -559,7 +567,7 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
                 "database_id": database_id
             })
             successful += 1
-            
+
         except Exception as e:
             results.append({
                 "person_code": enrollment.person_code,
@@ -568,7 +576,7 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
                 "message": str(e)
             })
             failed += 1
-    
+
     return {
         "success": True,
         "results": results,
@@ -592,20 +600,20 @@ async def legacy_enroll_face(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     # Validate image file
     image = validate_image(file)
-    
+
     try:
         # Extract face embedding
         embedding, metadata = face_engine.extract_embedding(image)
-        
+
         # Convert image to bytes
         from io import BytesIO
         buffer = BytesIO()
         image.save(buffer, format='JPEG')
         image_bytes = buffer.getvalue()
-        
+
         # Store in MySQL database (legacy endpoint treats name as person_code)
         database_id = await db_service.enroll_face(
             person_type="student",  # Default to student for legacy compatibility
@@ -616,7 +624,7 @@ async def legacy_enroll_face(
             original_name=file.filename,
             content_type="image/jpeg"
         )
-        
+
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content={
@@ -641,9 +649,9 @@ async def legacy_identify_face(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     image = validate_image(file)
-    
+
     try:
         result = face_engine.identify_face(image)
         return {
@@ -664,7 +672,7 @@ async def legacy_list_faces():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     faces = face_engine.list_enrolled_faces()
     return {
         "total_count": len(faces),
@@ -680,7 +688,7 @@ async def legacy_delete_face(name: str):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition engine not initialized"
         )
-    
+
     success = face_engine.delete_face(name)
     if success:
         return {
@@ -722,13 +730,13 @@ def validate_image(file: UploadFile) -> Image.Image:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File must be an image (JPG or PNG)"
         )
-    
+
     if file.content_type not in ['image/jpeg', 'image/jpg', 'image/png']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only JPG and PNG images are supported"
         )
-    
+
     try:
         image = Image.open(BytesIO(file.file.read()))
         if image.mode != 'RGB':
@@ -746,7 +754,7 @@ if __name__ == "__main__":
     os.makedirs("models", exist_ok=True)
     os.makedirs("storage", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    
+
     # Run the application on port 5000 for Replit compatibility
     uvicorn.run(
         "main:app",
