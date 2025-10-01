@@ -86,7 +86,7 @@ class DatabaseService:
     
     async def enroll_face(self, person_type: str, person_code: str, person_name: str, 
                          image_data: bytes, face_descriptor: List[float], 
-                         original_name: str = None, content_type: str = "image/jpeg") -> int:
+                         original_name: Optional[str] = None, content_type: str = "image/jpeg") -> int:
         """
         Enroll a face in the SQL Server database.
         
@@ -206,7 +206,7 @@ class DatabaseService:
         connection = None
         try:
             connection = self.get_connection()
-            cursor = connection.cursor()
+            cursor = connection.cursor(dictionary=True)
             
             if person_type:
                 cursor.execute(
@@ -245,6 +245,13 @@ class DatabaseService:
         finally:
             if connection:
                 connection.close()
+    
+    async def get_face_descriptors(self, person_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Alias for get_all_face_descriptors for API compatibility.
+        Get face descriptors from database, optionally filtered by person type.
+        """
+        return await self.get_all_face_descriptors(person_type)
     
     async def get_enrolled_faces(self, person_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get list of enrolled faces with metadata from MySQL."""

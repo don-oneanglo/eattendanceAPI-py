@@ -251,3 +251,40 @@ class FaceEngine:
             "is_initialized": self.app is not None,
             "providers": ['CPUExecutionProvider']
         }
+    
+    def get_face_count(self) -> int:
+        """
+        Get face count - returns 0 as faces are stored in MySQL database only.
+        This method exists for API compatibility.
+        """
+        return 0
+    
+    def identify_face(self, image: Image.Image) -> Dict[str, Any]:
+        """
+        Legacy method for face identification.
+        Returns empty matches as database lookup should be done separately.
+        """
+        try:
+            embedding, metadata = self.extract_embedding(image)
+            return {
+                "matches": [],
+                "bounding_box": metadata["bounding_box"],
+                "confidence": metadata["confidence"],
+                "total_enrolled": 0
+            }
+        except Exception as e:
+            raise FaceEngineError(f"Face identification failed: {str(e)}")
+    
+    def list_enrolled_faces(self) -> List[Dict[str, Any]]:
+        """
+        Legacy method for listing faces.
+        Returns empty list as faces are stored in MySQL database.
+        """
+        return []
+    
+    def delete_face(self, name: str) -> bool:
+        """
+        Legacy method for deleting faces.
+        Returns False as faces are stored in MySQL database.
+        """
+        return False

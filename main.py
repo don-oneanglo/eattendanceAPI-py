@@ -16,7 +16,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, Depends, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from PIL import Image
 import numpy as np
 import uvicorn
@@ -38,7 +38,8 @@ class FaceEnrollmentRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image")
     original_name: Optional[str] = None
 
-    @validator('image_base64')
+    @field_validator('image_base64')
+    @classmethod
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
             raise ValueError('Image must be base64 encoded with data URI format')
@@ -51,7 +52,8 @@ class FaceRecognitionRequest(BaseModel):
     similarity_threshold: Optional[float] = Field(0.6, ge=0.0, le=1.0)
     source_image_name: Optional[str] = None
 
-    @validator('image_base64')
+    @field_validator('image_base64')
+    @classmethod
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
             raise ValueError('Image must be base64 encoded with data URI format')
@@ -66,7 +68,8 @@ class FaceDeleteRequest(BaseModel):
 class FaceQualityRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image")
 
-    @validator('image_base64')
+    @field_validator('image_base64')
+    @classmethod
     def validate_base64_image(cls, v):
         if not v.startswith('data:image/'):
             raise ValueError('Image must be base64 encoded with data URI format')
@@ -82,7 +85,7 @@ class BatchEnrollmentItem(BaseModel):
 
 
 class BatchEnrollmentRequest(BaseModel):
-    enrollments: List[BatchEnrollmentItem] = Field(..., min_items=1, max_items=100)
+    enrollments: List[BatchEnrollmentItem] = Field(..., min_length=1, max_length=100)
 
 
 def decode_base64_image(base64_string: str) -> Image.Image:
