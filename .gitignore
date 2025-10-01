@@ -3,3 +3,9 @@
 models/
 *.onnx
 *.zip
+
+
+__pycache__
+services/__pycache__
+storage
+venv
