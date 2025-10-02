@@ -229,12 +229,7 @@ async def health_check():
             "database_face_count": database_face_count,
             "model_loaded": True,
             "similarity_threshold": face_engine.similarity_threshold,
-            "database_connected": database_connected,
-            "database_config": {
-                "host": get_settings().DB_HOST,
-                "database": get_settings().DB_NAME,
-                "user": get_settings().DB_USER
-            }
+            "database_connected": database_connected
         }
     except Exception as e:
         return JSONResponse(
