@@ -2,7 +2,12 @@
 
 This is a Face Recognition API built with Python FastAPI and the InsightFace library. The system provides face enrollment, verification, and identification capabilities using the high-accuracy buffalo_l model. It's designed as a production-ready backend service that can register faces, verify if two images contain the same person, and identify individuals from a database of enrolled faces. The API uses cosine similarity matching with configurable thresholds and maintains persistent storage of face embeddings.
 
-## Recent Updates (January 2025)
+## Recent Updates (October 2025)
+- **✅ User Management System**: Full user authentication and session management implementation
+- **✅ Password Security**: Bcrypt password hashing with secure token-based sessions
+- **✅ Audit Trail**: Comprehensive logging system for tracking all user actions
+- **✅ Admin Endpoints**: 13 new endpoints for user/session/log management
+- **✅ Bug Fixes**: Resolved Pydantic V2 migration issues and bcrypt compatibility
 - **✅ MySQL Database Integration**: Successfully connected to user's MySQL database (srv1521.hstgr.io)
 - **✅ Database Schema Support**: Full support for FaceData, Student, Teacher, and AttendanceRecords tables
 - **✅ MySQL-Only Storage**: Removed all file-based storage, API uses exclusively MySQL database
@@ -36,6 +41,15 @@ Preferred communication style: Simple, everyday language.
 - **✅ Recognition Logging**: Automatic creation of FaceRecognitionLogs table for tracking
 - **✅ Connection Pooling**: MySQL connection pool for optimal performance
 - **✅ Schema Compliance**: All endpoints use proper MySQL field mappings
+- **✅ User Management**: Tables for users, user_sessions, and logs for admin functionality
+- **✅ Audit Trail**: Comprehensive logging of all user actions and system events
+
+## Authentication & Security
+- **Password Hashing**: Direct bcrypt implementation for secure password storage
+- **Session Management**: Token-based authentication with session tracking
+- **User Roles**: Support for admin and regular user roles
+- **Audit Logging**: All user actions logged with timestamps, IP addresses, and user agents
+- **Session Lifecycle**: Login, logout, and automatic session cleanup
 
 ## Image Processing
 - **PIL/Pillow**: Handles image format conversion and basic processing
@@ -70,6 +84,8 @@ Preferred communication style: Simple, everyday language.
 
 ## Utilities
 - **Python Multipart (0.0.9)**: File upload handling for image submissions
+- **bcrypt**: Direct password hashing implementation for secure authentication
+- **mysql-connector-python**: MySQL database connectivity with connection pooling
 
 ## Model Dependencies
 - **Buffalo_l Model**: Downloaded automatically from InsightFace model zoo
@@ -79,3 +95,4 @@ Preferred communication style: Simple, everyday language.
 - **Python 3.10+**: Required runtime environment
 - **Local File System**: Storage for models, database, and temporary files
 - **Internet Connection**: Required for initial model download only
+- **MySQL Database**: External MySQL database for persistent storage
