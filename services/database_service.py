@@ -4,11 +4,13 @@ Database service for MySQL operations.
 
 import json
 import asyncio
+import secrets
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
 import logging
 import base64
 from io import BytesIO
+import bcrypt
 
 # Import MySQL connector
 try:
@@ -396,3 +398,486 @@ class DatabaseService:
         if base64_string.startswith('data:image/'):
             base64_string = base64_string.split(',')[1]
         return base64.b64decode(base64_string)
+    
+    # ============ USER MANAGEMENT METHODS ============
+    
+    async def create_user(self, username: str, password: str, full_name: str, 
+                         email: Optional[str], role: str, is_active: bool = True) -> int:
+        """Create a new user with hashed password."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            # Check if username already exists
+            cursor.execute("SELECT Id FROM users WHERE Username = %s", (username,))
+            if cursor.fetchone():
+                raise Exception(f"Username '{username}' already exists")
+            
+            # Hash password with bcrypt
+            password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            
+            # Insert new user
+            cursor.execute(
+                """INSERT INTO users (Username, PasswordHash, FullName, Email, Role, IsActive)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (username, password_hash, full_name, email, role, is_active)
+            )
+            
+            user_id = cursor.lastrowid
+            connection.commit()
+            
+            return int(user_id)
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error creating user: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """Get all users (excluding password hashes)."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT Id, Username, FullName, Email, Role, IsActive, 
+                   LastLoginDate, CreatedDate, UpdatedDate 
+                   FROM users ORDER BY CreatedDate DESC"""
+            )
+            
+            return cursor.fetchall()
+            
+        except Error as e:
+            logger.error(f"Error getting users: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single user by ID (excluding password hash)."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT Id, Username, FullName, Email, Role, IsActive,
+                   LastLoginDate, CreatedDate, UpdatedDate
+                   FROM users WHERE Id = %s""",
+                (user_id,)
+            )
+            
+            return cursor.fetchone()
+            
+        except Error as e:
+            logger.error(f"Error getting user by ID: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Get user by username including password hash (for authentication)."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT Id, Username, PasswordHash, FullName, Email, Role, IsActive,
+                   LastLoginDate, CreatedDate, UpdatedDate
+                   FROM users WHERE Username = %s""",
+                (username,)
+            )
+            
+            return cursor.fetchone()
+            
+        except Error as e:
+            logger.error(f"Error getting user by username: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def update_user(self, user_id: int, username: Optional[str] = None,
+                         password: Optional[str] = None, full_name: Optional[str] = None,
+                         email: Optional[str] = None, role: Optional[str] = None,
+                         is_active: Optional[bool] = None) -> bool:
+        """Update user information."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            # Build dynamic update query
+            updates = []
+            params = []
+            
+            if username is not None:
+                # Check if new username already exists
+                cursor.execute("SELECT Id FROM users WHERE Username = %s AND Id != %s", 
+                             (username, user_id))
+                if cursor.fetchone():
+                    raise Exception(f"Username '{username}' already exists")
+                updates.append("Username = %s")
+                params.append(username)
+            
+            if password is not None:
+                # Hash password with bcrypt
+                password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                updates.append("PasswordHash = %s")
+                params.append(password_hash)
+            
+            if full_name is not None:
+                updates.append("FullName = %s")
+                params.append(full_name)
+            
+            if email is not None:
+                updates.append("Email = %s")
+                params.append(email)
+            
+            if role is not None:
+                updates.append("Role = %s")
+                params.append(role)
+            
+            if is_active is not None:
+                updates.append("IsActive = %s")
+                params.append(is_active)
+            
+            if not updates:
+                return True  # Nothing to update
+            
+            params.append(user_id)
+            query = f"UPDATE users SET {', '.join(updates)} WHERE Id = %s"
+            
+            cursor.execute(query, params)
+            connection.commit()
+            
+            return cursor.rowcount > 0
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error updating user: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def delete_user(self, user_id: int) -> bool:
+        """Delete a user."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute("DELETE FROM users WHERE Id = %s", (user_id,))
+            deleted = cursor.rowcount > 0
+            connection.commit()
+            
+            return deleted
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error deleting user: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        """Verify a password against its hash."""
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    
+    async def update_last_login(self, user_id: int) -> None:
+        """Update user's last login date."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute(
+                "UPDATE users SET LastLoginDate = NOW() WHERE Id = %s",
+                (user_id,)
+            )
+            connection.commit()
+            
+        except Error as e:
+            logger.error(f"Error updating last login: {e}")
+        finally:
+            if connection:
+                connection.close()
+    
+    # ============ USER SESSION METHODS ============
+    
+    async def create_session(self, user_id: int, ip_address: Optional[str] = None,
+                            user_agent: Optional[str] = None) -> str:
+        """Create a new user session and return session token."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            # Generate unique session token
+            session_token = secrets.token_urlsafe(32)
+            
+            cursor.execute(
+                """INSERT INTO user_sessions (UserId, SessionToken, IpAddress, UserAgent, IsActive)
+                   VALUES (%s, %s, %s, %s, TRUE)""",
+                (user_id, session_token, ip_address, user_agent)
+            )
+            
+            connection.commit()
+            return session_token
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error creating session: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_all_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get all user sessions with user info."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT s.*, u.Username, u.FullName, u.Role
+                   FROM user_sessions s
+                   LEFT JOIN users u ON s.UserId = u.Id
+                   ORDER BY s.LoginTime DESC
+                   LIMIT %s""",
+                (limit,)
+            )
+            
+            return cursor.fetchall()
+            
+        except Error as e:
+            logger.error(f"Error getting sessions: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_active_sessions(self) -> List[Dict[str, Any]]:
+        """Get only active user sessions."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT s.*, u.Username, u.FullName, u.Role
+                   FROM user_sessions s
+                   LEFT JOIN users u ON s.UserId = u.Id
+                   WHERE s.IsActive = TRUE
+                   ORDER BY s.LoginTime DESC"""
+            )
+            
+            return cursor.fetchall()
+            
+        except Error as e:
+            logger.error(f"Error getting active sessions: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def terminate_session(self, session_id: int) -> bool:
+        """Terminate a user session."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute(
+                """UPDATE user_sessions 
+                   SET IsActive = FALSE, LogoutTime = NOW()
+                   WHERE Id = %s""",
+                (session_id,)
+            )
+            
+            terminated = cursor.rowcount > 0
+            connection.commit()
+            
+            return terminated
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error terminating session: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def validate_session(self, session_token: str) -> Optional[Dict[str, Any]]:
+        """Validate session token and return user info if valid."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            cursor.execute(
+                """SELECT s.*, u.Id as UserId, u.Username, u.FullName, u.Role, u.IsActive as UserIsActive
+                   FROM user_sessions s
+                   JOIN users u ON s.UserId = u.Id
+                   WHERE s.SessionToken = %s AND s.IsActive = TRUE AND u.IsActive = TRUE""",
+                (session_token,)
+            )
+            
+            return cursor.fetchone()
+            
+        except Error as e:
+            logger.error(f"Error validating session: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    # ============ AUDIT LOG METHODS ============
+    
+    async def log_user_action(self, user_id: Optional[int], username: Optional[str],
+                              action: str, table_name: Optional[str] = None,
+                              record_id: Optional[int] = None, old_value: Optional[str] = None,
+                              new_value: Optional[str] = None, description: Optional[str] = None,
+                              ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> int:
+        """Log a user action for audit trail."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor()
+            
+            cursor.execute(
+                """INSERT INTO logs (UserId, Username, Action, TableName, RecordId,
+                   OldValue, NewValue, Description, IpAddress, UserAgent)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (user_id, username, action, table_name, record_id, old_value,
+                 new_value, description, ip_address, user_agent)
+            )
+            
+            log_id = cursor.lastrowid
+            connection.commit()
+            
+            return int(log_id)
+            
+        except Error as e:
+            if connection:
+                connection.rollback()
+            logger.error(f"Error logging user action: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_logs(self, user_id: Optional[int] = None, action: Optional[str] = None,
+                      table_name: Optional[str] = None, start_date: Optional[str] = None,
+                      end_date: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get user logs with optional filtering."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            # Build dynamic query
+            where_clauses = []
+            params = []
+            
+            if user_id is not None:
+                where_clauses.append("UserId = %s")
+                params.append(user_id)
+            
+            if action is not None:
+                where_clauses.append("Action = %s")
+                params.append(action)
+            
+            if table_name is not None:
+                where_clauses.append("TableName = %s")
+                params.append(table_name)
+            
+            if start_date is not None:
+                where_clauses.append("DATE(CreatedDate) >= %s")
+                params.append(start_date)
+            
+            if end_date is not None:
+                where_clauses.append("DATE(CreatedDate) <= %s")
+                params.append(end_date)
+            
+            where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            params.append(limit)
+            
+            query = f"""SELECT * FROM logs{where_sql}
+                       ORDER BY CreatedDate DESC LIMIT %s"""
+            
+            cursor.execute(query, params)
+            return cursor.fetchall()
+            
+        except Error as e:
+            logger.error(f"Error getting logs: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    async def get_log_stats(self) -> Dict[str, Any]:
+        """Get statistics about logged actions."""
+        connection = None
+        try:
+            connection = self.get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            # Top actions
+            cursor.execute(
+                """SELECT Action, COUNT(*) as count
+                   FROM logs
+                   GROUP BY Action
+                   ORDER BY count DESC
+                   LIMIT 10"""
+            )
+            top_actions = cursor.fetchall()
+            
+            # Top users
+            cursor.execute(
+                """SELECT Username, COUNT(*) as count
+                   FROM logs
+                   WHERE Username IS NOT NULL
+                   GROUP BY Username
+                   ORDER BY count DESC
+                   LIMIT 10"""
+            )
+            top_users = cursor.fetchall()
+            
+            # Today's count
+            cursor.execute(
+                """SELECT COUNT(*) as count
+                   FROM logs
+                   WHERE DATE(CreatedDate) = CURDATE()"""
+            )
+            today_result = cursor.fetchone()
+            today_count = today_result['count'] if today_result else 0
+            
+            return {
+                "topActions": top_actions,
+                "topUsers": top_users,
+                "todayCount": today_count
+            }
+            
+        except Error as e:
+            logger.error(f"Error getting log stats: {e}")
+            raise
+        finally:
+            if connection:
+                connection.close()

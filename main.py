@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 from face_engine import FaceEngine, FaceEngineError
 from services.database_service import DatabaseService
 from config import get_settings
+from models.user_models import (
+    UserCreate, UserUpdate, UserResponse, LoginRequest, LoginResponse,
+    SessionResponse, LogResponse, LogStatsResponse
+)
 
 
 # Pydantic models for the new API
@@ -589,6 +593,387 @@ async def batch_enroll_faces(request: BatchEnrollmentRequest):
             "failed": failed
         }
     }
+
+
+# ============ USER MANAGEMENT ENDPOINTS ============
+
+@app.post("/api/admin/login")
+async def admin_login(request: LoginRequest):
+    """Admin login endpoint."""
+    try:
+        # Get user by username
+        user = await db_service.get_user_by_username(request.username)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        if not user['IsActive']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account is inactive"
+            )
+        
+        # Verify password
+        password_valid = await db_service.verify_password(request.password, user['PasswordHash'])
+        
+        if not password_valid:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        # Create session
+        # Note: We can't access request.client.host directly here, so we'll use a placeholder
+        session_token = await db_service.create_session(
+            user_id=user['Id'],
+            ip_address=None,  # Add middleware to capture this if needed
+            user_agent=None   # Add middleware to capture this if needed
+        )
+        
+        # Update last login
+        await db_service.update_last_login(user['Id'])
+        
+        # Log the login
+        await db_service.log_user_action(
+            user_id=user['Id'],
+            username=user['Username'],
+            action="LOGIN",
+            description=f"User {user['Username']} logged in"
+        )
+        
+        return {
+            "success": True,
+            "message": "Login successful",
+            "sessionToken": session_token,
+            "user": {
+                "Id": user['Id'],
+                "Username": user['Username'],
+                "FullName": user['FullName'],
+                "Email": user['Email'],
+                "Role": user['Role']
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login error: {str(e)}"
+        )
+
+
+@app.get("/api/admin/users")
+async def get_all_users():
+    """Get all users."""
+    try:
+        users = await db_service.get_all_users()
+        return {
+            "success": True,
+            "users": users
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving users: {str(e)}"
+        )
+
+
+@app.get("/api/admin/users/{user_id}")
+async def get_user(user_id: int):
+    """Get a single user by ID."""
+    try:
+        user = await db_service.get_user_by_id(user_id)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+        
+        return {
+            "success": True,
+            "user": user
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving user: {str(e)}"
+        )
+
+
+@app.post("/api/admin/users")
+async def create_user(request: UserCreate):
+    """Create a new user."""
+    try:
+        user_id = await db_service.create_user(
+            username=request.username,
+            password=request.password,
+            full_name=request.fullName,
+            email=request.email,
+            role=request.role,
+            is_active=request.isActive
+        )
+        
+        # Log the action
+        await db_service.log_user_action(
+            user_id=None,  # Could be from session if we had auth middleware
+            username="system",
+            action="CREATE_USER",
+            table_name="users",
+            record_id=user_id,
+            new_value=json.dumps({"username": request.username, "role": request.role}),
+            description=f"Created new user: {request.username}"
+        )
+        
+        return {
+            "success": True,
+            "message": "User created successfully",
+            "userId": user_id
+        }
+        
+    except Exception as e:
+        error_message = str(e)
+        if "already exists" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating user: {error_message}"
+        )
+
+
+@app.put("/api/admin/users/{user_id}")
+async def update_user(user_id: int, request: UserUpdate):
+    """Update a user."""
+    try:
+        # Get old user data for logging
+        old_user = await db_service.get_user_by_id(user_id)
+        
+        if not old_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+        
+        success = await db_service.update_user(
+            user_id=user_id,
+            username=request.username,
+            password=request.password,
+            full_name=request.fullName,
+            email=request.email,
+            role=request.role,
+            is_active=request.isActive
+        )
+        
+        if success:
+            # Log the action
+            await db_service.log_user_action(
+                user_id=None,
+                username="system",
+                action="UPDATE_USER",
+                table_name="users",
+                record_id=user_id,
+                old_value=json.dumps({"username": old_user['Username'], "role": old_user['Role']}),
+                new_value=json.dumps(request.dict(exclude_none=True)),
+                description=f"Updated user: {old_user['Username']}"
+            )
+            
+            return {
+                "success": True,
+                "message": "User updated successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        if "already exists" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating user: {error_message}"
+        )
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(user_id: int):
+    """Delete a user."""
+    try:
+        # Get user data for logging
+        user = await db_service.get_user_by_id(user_id)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+        
+        success = await db_service.delete_user(user_id)
+        
+        if success:
+            # Log the action
+            await db_service.log_user_action(
+                user_id=None,
+                username="system",
+                action="DELETE_USER",
+                table_name="users",
+                record_id=user_id,
+                old_value=json.dumps({"username": user['Username'], "role": user['Role']}),
+                description=f"Deleted user: {user['Username']}"
+            )
+            
+            return {
+                "success": True,
+                "message": "User deleted successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting user: {str(e)}"
+        )
+
+
+# ============ USER SESSION ENDPOINTS ============
+
+@app.get("/api/admin/user-sessions")
+async def get_all_sessions(limit: int = 100):
+    """Get all user sessions."""
+    try:
+        sessions = await db_service.get_all_sessions(limit)
+        return {
+            "success": True,
+            "sessions": sessions
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving sessions: {str(e)}"
+        )
+
+
+@app.get("/api/admin/user-sessions/active")
+async def get_active_sessions():
+    """Get active user sessions."""
+    try:
+        sessions = await db_service.get_active_sessions()
+        return {
+            "success": True,
+            "sessions": sessions
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving active sessions: {str(e)}"
+        )
+
+
+@app.post("/api/admin/user-sessions/{session_id}/terminate")
+async def terminate_session(session_id: int):
+    """Terminate a user session."""
+    try:
+        success = await db_service.terminate_session(session_id)
+        
+        if success:
+            # Log the action
+            await db_service.log_user_action(
+                user_id=None,
+                username="system",
+                action="TERMINATE_SESSION",
+                table_name="user_sessions",
+                record_id=session_id,
+                description=f"Terminated session ID: {session_id}"
+            )
+            
+            return {
+                "success": True,
+                "message": "Session terminated successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Session with ID {session_id} not found"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error terminating session: {str(e)}"
+        )
+
+
+# ============ AUDIT LOG ENDPOINTS ============
+
+@app.get("/api/admin/logs")
+async def get_logs(
+    userId: Optional[int] = None,
+    action: Optional[str] = None,
+    tableName: Optional[str] = None,
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
+    limit: int = 100
+):
+    """Get user logs with optional filtering."""
+    try:
+        logs = await db_service.get_logs(
+            user_id=userId,
+            action=action,
+            table_name=tableName,
+            start_date=startDate,
+            end_date=endDate,
+            limit=limit
+        )
+        
+        return {
+            "success": True,
+            "logs": logs
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving logs: {str(e)}"
+        )
+
+
+@app.get("/api/admin/logs/stats")
+async def get_log_stats():
+    """Get log statistics."""
+    try:
+        stats = await db_service.get_log_stats()
+        return {
+            "success": True,
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving log stats: {str(e)}"
+        )
 
 
 # Legacy compatibility endpoints (for backward compatibility with old frontend)
