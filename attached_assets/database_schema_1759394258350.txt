@@ -1,0 +1,176 @@
+-- -------------------------
+-- Student Table
+-- -------------------------
+CREATE TABLE Student (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    StudentCode CHAR(10),
+    StudentNickname VARCHAR(100),
+    StudentName VARCHAR(200),
+    StudentImage LONGBLOB,
+    EmailAddress VARCHAR(100),
+    Campus VARCHAR(50),
+    Form VARCHAR(100),
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- Teacher Table
+-- -------------------------
+CREATE TABLE Teacher (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    TeacherCode CHAR(10),
+    TeacherNickname VARCHAR(100),
+    TeacherName VARCHAR(200),
+    TeacherImage LONGBLOB,
+    EmailAddress VARCHAR(100),
+    Campus VARCHAR(50),
+    Department VARCHAR(100),
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- SubjectSet Table
+-- -------------------------
+CREATE TABLE SubjectSet (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    Campus CHAR(10),
+    SubjectSetID VARCHAR(50),
+    Subject VARCHAR(100),
+    SubjectSetDescription VARCHAR(200),
+    Credits INT DEFAULT 3,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- Class Table
+-- -------------------------
+CREATE TABLE Class (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    Campus CHAR(10),
+    SubjectSetID VARCHAR(50),
+    TeacherCode CHAR(10),
+    StudentCode CHAR(10),
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- Sessions Table
+-- -------------------------
+CREATE TABLE Sessions (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    SessionName VARCHAR(100) NOT NULL,
+    SubjectSetID VARCHAR(50) NOT NULL,
+    TeacherCode CHAR(10) NOT NULL,
+    Campus CHAR(10),
+    SessionDate DATE NOT NULL,
+    StartTime TIME,
+    EndTime TIME,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- AttendanceRecords Table
+-- -------------------------
+CREATE TABLE AttendanceRecords (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    SessionId INT NOT NULL,
+    StudentCode CHAR(10) NOT NULL,
+    Status VARCHAR(20) NOT NULL CHECK (Status IN ('Present', 'Absent', 'Late')),
+    AttendanceDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (SessionId) REFERENCES Sessions(Id)
+);
+
+-- -------------------------
+-- FaceData Table
+-- -------------------------
+CREATE TABLE FaceData (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    PersonType VARCHAR(20) NOT NULL CHECK (PersonType IN ('student', 'teacher')),
+    PersonCode CHAR(10) NOT NULL,
+    ImageData LONGBLOB NOT NULL,
+    FaceDescriptor TEXT,
+    OriginalName VARCHAR(255) NOT NULL,
+    ContentType VARCHAR(100) NOT NULL,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- Users Table (for administrators and elevated users)
+-- -------------------------
+CREATE TABLE users (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    Username VARCHAR(50) NOT NULL UNIQUE,
+    PasswordHash VARCHAR(255) NOT NULL,
+    FullName VARCHAR(200) NOT NULL,
+    Email VARCHAR(100),
+    Role VARCHAR(50) NOT NULL DEFAULT 'admin' CHECK (Role IN ('admin', 'super_admin', 'teacher', 'staff')),
+    IsActive BOOLEAN DEFAULT TRUE,
+    LastLoginDate DATETIME,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UpdatedDate DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- -------------------------
+-- User Sessions Table (for tracking login sessions)
+-- -------------------------
+CREATE TABLE user_sessions (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    UserId INT NOT NULL,
+    SessionToken VARCHAR(255) NOT NULL UNIQUE,
+    LoginTime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    LogoutTime DATETIME,
+    IpAddress VARCHAR(45),
+    UserAgent TEXT,
+    IsActive BOOLEAN DEFAULT TRUE,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (UserId) REFERENCES users(Id) ON DELETE CASCADE
+);
+
+-- -------------------------
+-- Logs Table (for tracking user actions and audit trail)
+-- -------------------------
+CREATE TABLE logs (
+    Id INT AUTO_INCREMENT PRIMARY KEY,
+    UserId INT,
+    Username VARCHAR(50),
+    Action VARCHAR(100) NOT NULL,
+    TableName VARCHAR(100),
+    RecordId INT,
+    OldValue TEXT,
+    NewValue TEXT,
+    Description TEXT,
+    IpAddress VARCHAR(45),
+    UserAgent TEXT,
+    CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (UserId) REFERENCES users(Id) ON DELETE SET NULL
+);
+
+-- -------------------------
+-- Indexes
+-- -------------------------
+CREATE INDEX IX_AttendanceRecords_Date ON AttendanceRecords (AttendanceDate);
+CREATE INDEX IX_AttendanceRecords_Session ON AttendanceRecords (SessionId);
+CREATE INDEX IX_AttendanceRecords_Student ON AttendanceRecords (StudentCode);
+
+CREATE INDEX IX_FaceData_Person ON FaceData (PersonType, PersonCode);
+
+CREATE INDEX IX_Sessions_Date ON Sessions (SessionDate);
+CREATE INDEX IX_Sessions_Teacher ON Sessions (TeacherCode);
+
+CREATE INDEX IX_Class_SubjectSet ON Class (SubjectSetID);
+CREATE INDEX IX_Class_Teacher ON Class (TeacherCode);
+CREATE INDEX IX_Class_Student ON Class (StudentCode);
+
+CREATE INDEX IX_Users_Username ON users (Username);
+CREATE INDEX IX_Users_Role ON users (Role);
+CREATE INDEX IX_Users_IsActive ON users (IsActive);
+
+CREATE INDEX IX_UserSessions_UserId ON user_sessions (UserId);
+CREATE INDEX IX_UserSessions_Token ON user_sessions (SessionToken);
+CREATE INDEX IX_UserSessions_IsActive ON user_sessions (IsActive);
+
+CREATE INDEX IX_Logs_UserId ON logs (UserId);
+CREATE INDEX IX_Logs_Action ON logs (Action);
+CREATE INDEX IX_Logs_TableName ON logs (TableName);
+CREATE INDEX IX_Logs_CreatedDate ON logs (CreatedDate);

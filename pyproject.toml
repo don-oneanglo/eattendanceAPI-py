@@ -10,7 +10,11 @@ dependencies = [
     "numpy>=2.3.2",
     "onnxruntime>=1.22.1",
     "opencv-python>=4.11.0.86",
+    "passlib[bcrypt]>=1.7.4",
     "pillow==10.2.0",
+    "pydantic>=2.11.7",
+    "python-jose[cryptography]>=3.5.0",
     "python-multipart==0.0.9",
+    "requests>=2.32.4",
     "uvicorn>=0.35.0",
 ]
