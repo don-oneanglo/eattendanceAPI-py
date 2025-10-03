@@ -3,6 +3,7 @@
 This is a Face Recognition API built with Python FastAPI and the InsightFace library. The system provides face enrollment, verification, and identification capabilities using the high-accuracy buffalo_l model. It's designed as a production-ready backend service that can register faces, verify if two images contain the same person, and identify individuals from a database of enrolled faces. The API uses cosine similarity matching with configurable thresholds and maintains persistent storage of face embeddings.
 
 ## Recent Updates (October 2025)
+- **✅ Port Configuration**: API now runs on port 8000 (updated from 5100) to match production deployment
 - **✅ User Management System**: Full user authentication and session management implementation
 - **✅ Password Security**: Bcrypt password hashing with secure token-based sessions
 - **✅ Audit Trail**: Comprehensive logging system for tracking all user actions
