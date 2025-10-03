@@ -1144,13 +1144,13 @@ if __name__ == "__main__":
     print(f"Starting Face Recognition API...")
     print(f"Environment: {'Replit' if is_replit else 'Local'}")
     print(f"Database Host: {get_settings().DB_HOST}")
-    print(f"Server will be available at: http://0.0.0.0:5000")
+    print(f"Server will be available at: http://0.0.0.0:8000")
 
-    # Run the application on port 5000
+    # Run the application on port 8000
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=5100,
+        port=8000,
         reload=False,
         log_level="info"
     )
